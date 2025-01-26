@@ -44,7 +44,7 @@ pipx install git+https://github.com/ma4nn/pp-terminal
 The commands mentioned above all require the Portfolio Performance XML file as input.  
 You can either provide that file as first parameter to the command
 ```
-pp-terminal --file=depot.xml view depots
+pp-terminal depot.xml view depots
 ```
 or by setting an environment variable you can omit the parameter
 ```

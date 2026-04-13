@@ -41,6 +41,7 @@ from pp_terminal.exceptions import InputError
 from pp_terminal.utils.cache import checksum
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.vap import calculate_vap, get_base_rate_for_year, add_account_balances
+from pp_terminal.data.xml_writer import PpXmlWriter
 from pp_terminal.utils.config import Config, get_tax_rate, get_exempt_rate, get_exempt_rate_attribute, get_tax_files
 
 log = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ _MCP_INSTRUCTIONS = """Portfolio Performance analytics server for a single portf
 
 Workflow:
 1. Use query_securities or query_accounts to discover holdings, IDs, and balances.
-2. Use the appropriate analysis tool (see tool selection guide below).
+2. Use the appropriate analysis or import tool (see tool selection guide below).
 
 Tool selection guide:
 - "Show my holdings" / "What securities do I have?" → query_securities
@@ -60,12 +61,25 @@ Tool selection guide:
 - "What if I sell N shares of X?" → simulate_sell_shares
 - "Show FIFO lots for X" / "Purchase history for X" → query_fifo_lots
 - "Calculate Vorabpauschale" / "VAP for year X" → simulate_vap
+- "Add a new security/ETF" → import_security
+- "Record a buy/purchase" → import_buy
+- "Record a sale" → import_sell
+- "Record a dividend" → import_dividend
+- "Record a deposit/withdrawal" → import_deposit / import_withdrawal
+- "Record a stock split" → import_stock_split
+- "Transfer cash between accounts" → import_account_transfer
+- "Record share delivery" → import_delivery_inbound / import_delivery_outbound
+- "Record interest payment" → import_interest
 
 The sell/FIFO tools accept a 'security' parameter that can be either an ISIN (e.g. 'IE00B4L5Y983')
 or an internal securityId UUID. Prefer ISIN when available.
 
 All dates are ISO format strings (e.g. '2025-06-15'). All monetary amounts are in the security's
 native currency. Tax rates are in percent (e.g. 26.375 for German Abgeltungssteuer + Soli).
+
+Import tools modify the Portfolio Performance XML file directly. A .bak backup is always created
+before writing. After any import, the in-memory portfolio is automatically refreshed.
+Amounts for import tools are in the currency's base unit (e.g. EUR, not cents).
 """
 
 _SUMMARY_COLUMNS = ['securityName', 'currency', 'shares', 'salePrice', 'costBasis',
@@ -370,6 +384,318 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
             security_id, account_id, target_net=target_net, tax_csv_data=tax_csv_data
         )
         return _clean_records(result) if not result.empty else []
+
+    # ─── Import tools (write to XML) ───
+
+    def _writer() -> PpXmlWriter:
+        return PpXmlWriter(file_path)
+
+    def _invalidate_portfolio() -> None:
+        state['checksum'] = ''
+
+    @mcp.tool()
+    def import_security(
+        name: str,
+        currency: str,
+        isin: str | None = None,
+        wkn: str | None = None,
+        ticker: str | None = None,
+        feed: str = 'MANUAL',
+    ) -> dict[str, str]:
+        """Add a new security definition to the portfolio.
+
+        Args:
+            name: Display name (e.g. 'Vanguard FTSE All-World')
+            currency: Trading currency (e.g. 'EUR', 'USD')
+            isin: ISIN identifier (e.g. 'IE00B4L5Y983')
+            wkn: WKN identifier
+            ticker: Ticker symbol (e.g. 'VWCE.DE')
+            feed: Price feed source (defaults to 'MANUAL')
+        """
+        sec_uuid = _writer().add_security(name, currency, isin=isin, wkn=wkn, ticker=ticker, feed=feed)
+        _invalidate_portfolio()
+        return {'securityId': sec_uuid, 'name': name, 'status': 'created'}
+
+    @mcp.tool()
+    def import_buy(
+        security: str,
+        account_id: str,
+        date: str,
+        shares: float,
+        amount: float,
+        currency: str,
+        fees: float = 0.0,
+        taxes: float = 0.0,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record a BUY transaction (purchase shares via a cash account).
+
+        Creates the cross-linked portfolio + account transaction pair.
+        Use query_accounts(account_type='DEPOSIT') to find cash account IDs.
+        The portfolio linked to this cash account is found automatically.
+
+        Args:
+            security: ISIN (e.g. 'IE00B4L5Y983') or securityId UUID
+            account_id: Cash account UUID (from query_accounts)
+            date: Transaction date as ISO string (e.g. '2025-01-15')
+            shares: Number of shares purchased
+            amount: Total transaction amount in base currency units (e.g. 1000.50 for EUR 1000.50)
+            currency: Transaction currency (e.g. 'EUR')
+            fees: Transaction fees in currency units (default 0)
+            taxes: Transaction taxes in currency units (default 0)
+            note: Optional transaction note
+        """
+        txn_uuid = _writer().add_buy(
+            security, account_id, datetime.fromisoformat(date),
+            shares, amount, currency, fees=fees, taxes=taxes, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'BUY', 'status': 'created'}
+
+    @mcp.tool()
+    def import_sell(
+        security: str,
+        account_id: str,
+        date: str,
+        shares: float,
+        amount: float,
+        currency: str,
+        fees: float = 0.0,
+        taxes: float = 0.0,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record a SELL transaction (sell shares, proceeds go to cash account).
+
+        Args:
+            security: ISIN or securityId UUID
+            account_id: Cash account UUID
+            date: Transaction date as ISO string (e.g. '2025-01-15')
+            shares: Number of shares sold
+            amount: Total proceeds in currency units (e.g. 1500.00)
+            currency: Transaction currency (e.g. 'EUR')
+            fees: Transaction fees (default 0)
+            taxes: Transaction taxes (default 0)
+            note: Optional transaction note
+        """
+        txn_uuid = _writer().add_sell(
+            security, account_id, datetime.fromisoformat(date),
+            shares, amount, currency, fees=fees, taxes=taxes, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'SELL', 'status': 'created'}
+
+    @mcp.tool()
+    def import_dividend(
+        security: str,
+        account_id: str,
+        date: str,
+        amount: float,
+        currency: str,
+        shares: float = 0.0,
+        taxes: float = 0.0,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record a DIVIDEND payment received into a cash account.
+
+        Args:
+            security: ISIN or securityId UUID
+            account_id: Cash account UUID where dividend was received
+            date: Payment date as ISO string
+            amount: Net dividend amount received in currency units
+            currency: Payment currency (e.g. 'EUR')
+            shares: Number of shares at ex-dividend date (informational)
+            taxes: Withholding taxes in currency units (default 0)
+            note: Optional note
+        """
+        txn_uuid = _writer().add_dividend(
+            security, account_id, datetime.fromisoformat(date),
+            amount, currency, shares=shares, taxes=taxes, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'DIVIDENDS', 'status': 'created'}
+
+    @mcp.tool()
+    def import_deposit(
+        account_id: str,
+        date: str,
+        amount: float,
+        currency: str,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record a cash DEPOSIT into an account.
+
+        Args:
+            account_id: Cash account UUID
+            date: Deposit date as ISO string
+            amount: Deposit amount in currency units
+            currency: Currency (e.g. 'EUR')
+            note: Optional note
+        """
+        txn_uuid = _writer().add_deposit(
+            account_id, datetime.fromisoformat(date), amount, currency, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'DEPOSIT', 'status': 'created'}
+
+    @mcp.tool()
+    def import_withdrawal(
+        account_id: str,
+        date: str,
+        amount: float,
+        currency: str,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record a cash WITHDRAWAL (removal) from an account.
+
+        Args:
+            account_id: Cash account UUID
+            date: Withdrawal date as ISO string
+            amount: Withdrawal amount in currency units
+            currency: Currency (e.g. 'EUR')
+            note: Optional note
+        """
+        txn_uuid = _writer().add_withdrawal(
+            account_id, datetime.fromisoformat(date), amount, currency, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'REMOVAL', 'status': 'created'}
+
+    @mcp.tool()
+    def import_stock_split(
+        security: str,
+        date: str,
+        ratio: str,
+    ) -> dict[str, str]:
+        """Record a STOCK_SPLIT event on a security.
+
+        Args:
+            security: ISIN or securityId UUID
+            date: Split date as ISO string
+            ratio: Split ratio (e.g. '4:1' for a 4-for-1 split, '1:10' for a reverse split)
+        """
+        _writer().add_stock_split(security, datetime.fromisoformat(date), ratio)
+        _invalidate_portfolio()
+        return {'security': security, 'type': 'STOCK_SPLIT', 'ratio': ratio, 'status': 'created'}
+
+    @mcp.tool()
+    def import_delivery_inbound(
+        security: str,
+        portfolio_id: str,
+        date: str,
+        shares: float,
+        amount: float,
+        currency: str,
+        fees: float = 0.0,
+        taxes: float = 0.0,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record a DELIVERY_INBOUND — shares transferred into a portfolio without a cash leg.
+
+        Use for share transfers from another broker, inheritance, gifts, etc.
+
+        Args:
+            security: ISIN or securityId UUID
+            portfolio_id: Securities account (portfolio) UUID
+            date: Delivery date as ISO string
+            shares: Number of shares delivered
+            amount: Market value at delivery in currency units
+            currency: Currency (e.g. 'EUR')
+            fees: Fees (default 0)
+            taxes: Taxes (default 0)
+            note: Optional note
+        """
+        txn_uuid = _writer().add_delivery_inbound(
+            security, portfolio_id, datetime.fromisoformat(date),
+            shares, amount, currency, fees=fees, taxes=taxes, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'DELIVERY_INBOUND', 'status': 'created'}
+
+    @mcp.tool()
+    def import_delivery_outbound(
+        security: str,
+        portfolio_id: str,
+        date: str,
+        shares: float,
+        amount: float,
+        currency: str,
+        fees: float = 0.0,
+        taxes: float = 0.0,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record a DELIVERY_OUTBOUND — shares removed from a portfolio without a cash leg.
+
+        Use for share transfers to another broker, gifts out, etc.
+
+        Args:
+            security: ISIN or securityId UUID
+            portfolio_id: Securities account (portfolio) UUID
+            date: Delivery date as ISO string
+            shares: Number of shares removed
+            amount: Market value at removal in currency units
+            currency: Currency (e.g. 'EUR')
+            fees: Fees (default 0)
+            taxes: Taxes (default 0)
+            note: Optional note
+        """
+        txn_uuid = _writer().add_delivery_outbound(
+            security, portfolio_id, datetime.fromisoformat(date),
+            shares, amount, currency, fees=fees, taxes=taxes, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'DELIVERY_OUTBOUND', 'status': 'created'}
+
+    @mcp.tool()
+    def import_interest(
+        account_id: str,
+        date: str,
+        amount: float,
+        currency: str,
+        taxes: float = 0.0,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record an INTEREST payment received on a cash account.
+
+        Args:
+            account_id: Cash account UUID
+            date: Payment date as ISO string
+            amount: Interest amount in currency units
+            currency: Currency (e.g. 'EUR')
+            taxes: Withholding taxes (default 0)
+            note: Optional note
+        """
+        txn_uuid = _writer().add_interest(
+            account_id, datetime.fromisoformat(date),
+            amount, currency, taxes=taxes, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'INTEREST', 'status': 'created'}
+
+    @mcp.tool()
+    def import_account_transfer(
+        from_account_id: str,
+        to_account_id: str,
+        date: str,
+        amount: float,
+        currency: str,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Transfer cash between two deposit accounts.
+
+        Args:
+            from_account_id: Source cash account UUID
+            to_account_id: Destination cash account UUID
+            date: Transfer date as ISO string
+            amount: Transfer amount in currency units
+            currency: Currency (e.g. 'EUR')
+            note: Optional note
+        """
+        txn_uuid = _writer().add_account_transfer(
+            from_account_id, to_account_id, datetime.fromisoformat(date),
+            amount, currency, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'ACCOUNT_TRANSFER', 'status': 'created'}
 
     return mcp
 

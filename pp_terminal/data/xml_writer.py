@@ -22,6 +22,7 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import lxml.etree as ET  # pylint: disable=c-extension-no-member
 
@@ -50,8 +51,8 @@ class PpXmlWriter:
     def __init__(self, file_path: Path):
         self._file_path = file_path
         self._parser = ET.XMLParser(remove_blank_text=False, resolve_entities=False, no_network=True)
-        self._tree: ET.ElementTree | None = None
-        self._root: ET.Element | None = None
+        self._tree: ET.ElementTree = None  # noqa  # set by _load()
+        self._root: ET.Element = None  # noqa  # set by _load()
         self._id_counter: int | None = None
 
     def _load(self) -> None:
@@ -175,7 +176,7 @@ class PpXmlWriter:
         return None
 
     def _make_sub(self, parent: ET.Element, tag: str, text: str | None = None,
-                  attribs: dict | None = None, with_id: bool = False) -> ET.Element:
+                  attribs: dict[str, str] | None = None, with_id: bool = False) -> ET.Element:
         el = ET.SubElement(parent, tag)
         if with_id:
             el.set('id', self._alloc_id())
@@ -198,7 +199,7 @@ class PpXmlWriter:
 
     # ─── Public API ───
 
-    def delete_transaction(self, txn_uuid: str, backup: bool = True) -> dict:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    def delete_transaction(self, txn_uuid: str, backup: bool = True) -> dict[str, Any]:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
         """Delete a transaction by UUID. Handles cross-entry cleanup for transfers.
 
         Returns a dict with details of what was deleted.
@@ -217,7 +218,7 @@ class PpXmlWriter:
             raise InputError(f"Transaction with UUID '{txn_uuid}' not found")
 
         ttype = txn_el.findtext('type', '?')
-        result: dict = {'uuid': txn_uuid, 'type': ttype, 'deleted': []}
+        result: dict[str, Any] = {'uuid': txn_uuid, 'type': ttype, 'deleted': []}
 
         # Simple (non-transfer) account transaction or portfolio transaction
         if ttype not in ('TRANSFER_IN', 'TRANSFER_OUT'):

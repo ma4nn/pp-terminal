@@ -396,7 +396,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
     @mcp.tool()
     def delete_transaction(
         transaction_uuid: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Delete a transaction by its UUID.
 
         Handles cross-entry cleanup for transfer transactions (removes both sides).

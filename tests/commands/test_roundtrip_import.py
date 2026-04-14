@@ -9,11 +9,13 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
 from pp_terminal.data.xml_writer import PpXmlWriter
+from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import TransactionType
 from pp_terminal.main import app
 
@@ -28,13 +30,13 @@ def writable_xml(tmp_path: Path) -> Path:
     return dst
 
 
-def _build_portfolio(xml_path: Path):
+def _build_portfolio(xml_path: Path) -> Portfolio:
     """Parse an XML file through the full ppxml2db -> Portfolio pipeline."""
     builder = PpPortfolioBuilder()
     return builder.construct(xml_path)
 
 
-def _find_txn(portfolio, txn_type: str, date_str: str, security_uuid: str | None = None):
+def _find_txn(portfolio: Portfolio, txn_type: str, date_str: str, security_uuid: str | None = None) -> pd.Series | None:
     """Find a transaction in the portfolio by type and date.
 
     Uses securities_account_transactions for security-related types,

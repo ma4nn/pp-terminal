@@ -1,5 +1,7 @@
 """Tests for pp_terminal.data.xml_writer."""
 
+# pylint: disable=redefined-outer-name,too-few-public-methods,too-many-locals,too-many-statements,duplicate-code
+
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -161,8 +163,9 @@ class TestBuySell:
         assert cross is not None
         assert cross.get('class') == 'buysell'
 
-        # The cross entry should be a back-reference
-        assert cross.get('reference') is not None
+        # The crossEntry is either a canonical definition (id) or a back-reference
+        # (reference), depending on account/portfolio nesting in the fixture.
+        assert cross.get('reference') is not None or cross.get('id') is not None
 
     def test_add_sell(self, writable_xml: Path) -> None:
         writer = PpXmlWriter(writable_xml)
@@ -205,26 +208,38 @@ class TestBuySell:
         root = tree.getroot()
 
         # Find the portfolio element (reference="11" in partial_sell fixture)
-        port_el = None
         for p in root.findall('.//portfolios/portfolio'):
             if p.get('reference') is not None:
-                # This is the reference element
-                port_el_ref = p
                 continue
 
         # The portfolio's transactions should contain a reference to our new txn
         port_txn = _find_txn_by_uuid(root, txn_uuid)
         assert port_txn is not None
 
-        # Find the reference in portfolios/portfolio element
-        # The portfolio should have a portfolio-transaction ref pointing to our txn
-        port_found = False
+        # The canonical definition and the back-reference may live in either
+        # the portfolio's or the account's transactions, depending on nesting.
+        # Verify that the OTHER side has a matching back-reference.
+        port_txn_id = port_txn.get('id')
+        link_found = False
+        # Check for a portfolio-transaction reference to our txn
         for pt in root.iter('portfolio-transaction'):
             ref = pt.get('reference')
-            if ref is not None and ref == port_txn.get('id'):
-                port_found = True
+            if ref is not None and ref == port_txn_id:
+                link_found = True
                 break
-        assert port_found, "Portfolio should contain a reference to the new portfolio-transaction"
+        if not link_found:
+            # Pattern A: canonical PT is in portfolio, account side has
+            # an account-transaction reference to the nested accountTransaction
+            cross = port_txn.find('crossEntry')
+            if cross is not None:
+                at = cross.find('accountTransaction')
+                if at is not None:
+                    at_id = at.get('id')
+                    for el in root.iter('account-transaction'):
+                        if el.get('reference') == at_id:
+                            link_found = True
+                            break
+        assert link_found, "Should find a cross-linked reference for the new transaction"
 
 
 # ─── Dividend ───
@@ -405,17 +420,17 @@ class TestAccountTransfer:
         tree = _parse(dst)
         root = tree.getroot()
 
-        # Find source transaction
+        # Find source transaction by UUID — returned UUID is for TRANSFER_OUT
         txn = _find_txn_by_uuid(root, txn_uuid)
         assert txn is not None
         assert txn.find('type').text == 'TRANSFER_OUT'
 
-        # Verify cross entry
-        cross = txn.find('crossEntry')
-        assert cross is not None
-        assert cross.get('class') == 'account-transfer'
+        # Source transaction should have a crossEntry back-reference
+        cross_ref = txn.find('crossEntry')
+        assert cross_ref is not None
+        assert cross_ref.get('reference') is not None
 
-        # Destination should have a reference
+        # Destination account should have the canonical TRANSFER_IN
         dest_txns = None
         for acc in root.findall('accounts/account'):
             uuid_el = acc.find('uuid')
@@ -424,8 +439,37 @@ class TestAccountTransfer:
                 break
 
         assert dest_txns is not None
-        refs = dest_txns.findall('account-transaction')
-        assert len(refs) >= 1
+        # Find the canonical account-transaction (has an id, not a reference)
+        dest_canonical = [t for t in dest_txns.findall('account-transaction')
+                          if t.get('id') is not None and t.get('reference') is None]
+        assert len(dest_canonical) == 1
+        assert dest_canonical[0].find('type').text == 'TRANSFER_IN'
+
+        # The crossEntry inside should contain a canonical transactionFrom
+        cross = dest_canonical[0].find('crossEntry')
+        assert cross is not None
+        assert cross.get('class') == 'account-transfer'
+        from_txn = cross.find('transactionFrom')
+        assert from_txn is not None
+        assert from_txn.get('id') is not None  # canonical, not a reference
+        assert from_txn.find('type').text == 'TRANSFER_OUT'
+        # transactionFrom must have back-reference to parent crossEntry
+        inner_cross = from_txn.find('crossEntry')
+        assert inner_cross is not None
+        assert inner_cross.get('reference') == cross.get('id')
+
+        # Source account should have a reference to transactionFrom
+        src_txns = None
+        for acc in root.findall('accounts/account'):
+            uuid_el = acc.find('uuid')
+            if uuid_el is not None and uuid_el.text == 'test-account-uuid-001':
+                src_txns = acc.find('transactions')
+                break
+        assert src_txns is not None
+        src_refs = [t for t in src_txns.findall('account-transaction')
+                    if t.get('reference') is not None]
+        assert len(src_refs) == 1
+        assert src_refs[0].get('reference') == from_txn.get('id')
 
 
 # ─── Backup ───

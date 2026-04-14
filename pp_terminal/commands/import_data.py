@@ -28,6 +28,9 @@ from typing_extensions import Annotated
 
 from pp_terminal.data.xml_writer import PpXmlWriter
 
+# CLI commands for transaction types unavoidably take many parameters.
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+
 app = typer.Typer()
 console = Console()
 log = logging.getLogger(__name__)

@@ -394,7 +394,23 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         state['checksum'] = ''
 
     @mcp.tool()
-    def import_security(
+    def delete_transaction(
+        transaction_uuid: str,
+    ) -> dict:
+        """Delete a transaction by its UUID.
+
+        Handles cross-entry cleanup for transfer transactions (removes both sides).
+        Use query_accounts or query_securities to find transaction UUIDs.
+
+        Args:
+            transaction_uuid: The UUID of the transaction to delete
+        """
+        result = _writer().delete_transaction(transaction_uuid)
+        _invalidate_portfolio()
+        return result
+
+    @mcp.tool()
+    def import_security(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         name: str,
         currency: str,
         isin: str | None = None,
@@ -417,7 +433,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return {'securityId': sec_uuid, 'name': name, 'status': 'created'}
 
     @mcp.tool()
-    def import_buy(
+    def import_buy(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         security: str,
         account_id: str,
         date: str,
@@ -453,7 +469,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return {'transactionId': txn_uuid, 'type': 'BUY', 'status': 'created'}
 
     @mcp.tool()
-    def import_sell(
+    def import_sell(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         security: str,
         account_id: str,
         date: str,
@@ -485,7 +501,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return {'transactionId': txn_uuid, 'type': 'SELL', 'status': 'created'}
 
     @mcp.tool()
-    def import_dividend(
+    def import_dividend(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         security: str,
         account_id: str,
         date: str,
@@ -578,7 +594,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return {'security': security, 'type': 'STOCK_SPLIT', 'ratio': ratio, 'status': 'created'}
 
     @mcp.tool()
-    def import_delivery_inbound(
+    def import_delivery_inbound(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         security: str,
         portfolio_id: str,
         date: str,
@@ -612,7 +628,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return {'transactionId': txn_uuid, 'type': 'DELIVERY_INBOUND', 'status': 'created'}
 
     @mcp.tool()
-    def import_delivery_outbound(
+    def import_delivery_outbound(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         security: str,
         portfolio_id: str,
         date: str,
@@ -646,7 +662,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return {'transactionId': txn_uuid, 'type': 'DELIVERY_OUTBOUND', 'status': 'created'}
 
     @mcp.tool()
-    def import_interest(
+    def import_interest(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         account_id: str,
         date: str,
         amount: float,
@@ -672,27 +688,84 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return {'transactionId': txn_uuid, 'type': 'INTEREST', 'status': 'created'}
 
     @mcp.tool()
-    def import_account_transfer(
-        from_account_id: str,
-        to_account_id: str,
+    def import_fees(
+        account_id: str,
         date: str,
         amount: float,
         currency: str,
         note: str | None = None,
     ) -> dict[str, str]:
+        """Record a FEES (fee payment) on a cash account.
+
+        Args:
+            account_id: Cash account UUID
+            date: Fee date as ISO string
+            amount: Fee amount in currency units
+            currency: Currency (e.g. 'EUR')
+            note: Optional note
+        """
+        txn_uuid = _writer().add_fees(
+            account_id, datetime.fromisoformat(date),
+            amount, currency, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'FEES', 'status': 'created'}
+
+    @mcp.tool()
+    def import_taxes(
+        account_id: str,
+        date: str,
+        amount: float,
+        currency: str,
+        note: str | None = None,
+    ) -> dict[str, str]:
+        """Record a TAXES (tax payment) on a cash account.
+
+        Args:
+            account_id: Cash account UUID
+            date: Tax payment date as ISO string
+            amount: Tax amount in currency units
+            currency: Currency (e.g. 'EUR')
+            note: Optional note
+        """
+        txn_uuid = _writer().add_taxes(
+            account_id, datetime.fromisoformat(date),
+            amount, currency, note=note,
+        )
+        _invalidate_portfolio()
+        return {'transactionId': txn_uuid, 'type': 'TAXES', 'status': 'created'}
+
+    @mcp.tool()
+    def import_account_transfer(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        from_account_id: str,
+        to_account_id: str,
+        date: str,
+        amount: float,
+        currency: str,
+        to_amount: float | None = None,
+        to_currency: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, str]:
         """Transfer cash between two deposit accounts.
+
+        For same-currency transfers, provide amount and currency.
+        For cross-currency (FX) transfers, also provide to_amount and to_currency
+        for the destination side.
 
         Args:
             from_account_id: Source cash account UUID
             to_account_id: Destination cash account UUID
             date: Transfer date as ISO string
-            amount: Transfer amount in currency units
-            currency: Currency (e.g. 'EUR')
+            amount: Source amount in currency units
+            currency: Source currency (e.g. 'CHF')
+            to_amount: Destination amount (for cross-currency transfers)
+            to_currency: Destination currency (for cross-currency transfers)
             note: Optional note
         """
         txn_uuid = _writer().add_account_transfer(
             from_account_id, to_account_id, datetime.fromisoformat(date),
-            amount, currency, note=note,
+            amount, currency, to_amount=to_amount, to_currency=to_currency,
+            note=note,
         )
         _invalidate_portfolio()
         return {'transactionId': txn_uuid, 'type': 'ACCOUNT_TRANSFER', 'status': 'created'}

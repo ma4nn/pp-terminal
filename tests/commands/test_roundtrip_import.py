@@ -3,6 +3,8 @@
 Verifies that every transaction type survives the full write -> parse -> query cycle.
 """
 
+# pylint: disable=redefined-outer-name,too-few-public-methods,import-outside-toplevel,duplicate-code
+
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +14,7 @@ from typer.testing import CliRunner
 
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
 from pp_terminal.data.xml_writer import PpXmlWriter
-from pp_terminal.domain.schemas import TransactionType, AccountType
+from pp_terminal.domain.schemas import TransactionType
 from pp_terminal.main import app
 
 FIXTURES = Path(__file__).parent.parent / 'fixtures'
@@ -255,11 +257,10 @@ class TestRoundTripStockSplit:
 class TestRoundTripAccountTransfer:
 
     def test_transfer_roundtrip(self, writable_xml: Path) -> None:
-        """Account transfers need a second cash account.
-
-        The new account must appear *before* the existing one in the XML so
-        that ppxml2db's iterparse has already mapped its id when it encounters
-        the cross-entry ``accountTo reference``.
+        """Account transfers need the source account to appear before the
+        destination in the XML so that ppxml2db's iterparse has already
+        mapped the source id when it encounters the crossEntry's
+        ``accountFrom reference`` inside the destination's TRANSFER_IN.
         """
         import lxml.etree as ET
 
@@ -268,7 +269,7 @@ class TestRoundTripAccountTransfer:
         accounts = root.find('accounts')
         acc2 = ET.Element('account')
         acc2.set('id', '100')
-        accounts.insert(0, acc2)  # before existing account
+        accounts.append(acc2)  # after existing (source) account
         ET.SubElement(acc2, 'uuid').text = 'test-account-uuid-002'
         ET.SubElement(acc2, 'name').text = 'Second Account'
         ET.SubElement(acc2, 'currencyCode').text = 'EUR'

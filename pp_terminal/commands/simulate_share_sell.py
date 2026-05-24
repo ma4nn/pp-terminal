@@ -27,7 +27,7 @@ import pandas as pd
 import typer
 from pandera.typing import DataFrame
 
-from pp_terminal.data.filters import filter_by_account_and_security, filter_by_security, filter_by_account
+from pp_terminal.data.filters import filter_by_security, filter_by_account
 from pp_terminal.domain.cost_basis import enrich_fifo_lots, finalize_sell_lots
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.sell_strategy import SellStrategy, FixedSharesStrategy, MinTaxStrategy
@@ -85,9 +85,14 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
         raise InputError(f"No price data for: {', '.join(missing_prices)}")
 
     all_enriched = []
-    for (acc_id, sec_id, _currency), _shares_held in holdings.items():
+    seen_security_ids: set[str] = set()
+    for (_acc_id, sec_id, _currency), _shares_held in holdings.items():
+        if sec_id in seen_security_ids:
+            continue
+        seen_security_ids.add(sec_id)
+        # All accounts needed so cost_basis.py can resolve TRANSFER_OUT → TRANSFER_IN pairs.
         transactions = snapshot.securities_account_transactions.pipe(
-            filter_by_account_and_security, security_id=sec_id, account_id=acc_id
+            filter_by_security, security_id=sec_id
         )
         sale_price = price if price else latest_prices.loc[sec_id]
         enriched = enrich_fifo_lots(

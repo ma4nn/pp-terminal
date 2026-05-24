@@ -37,7 +37,7 @@ def _filter_purchase_transactions(transactions: DataFrame[TransactionSchema]) ->
     return TransactionSchema.validate(valid_purchases)
 
 
-def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionSchema]) -> DataFrame[TaxLotSchema]:
+def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionSchema]) -> DataFrame[TaxLotSchema]:  # pylint: disable=too-many-locals,too-many-branches
     """
     Match all sell transactions to purchase lots using FIFO and return remaining lots.
 
@@ -52,6 +52,11 @@ def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionS
         for schema validation and interface consistency, internally we use list of dicts
         for ~10x faster mutation during the matching algorithm. DataFrame .loc[] access
         has significant overhead that doesn't add value for sequential state updates.
+
+        Depot transfers (TRANSFER_OUT → TRANSFER_IN pairs, as recorded by Portfolio
+        Performance's "Wertpapierübertrag" feature) are handled by moving FIFO lots from the
+        source account to the destination account while preserving the original acquisition
+        cost.
     """
     lots = _filter_purchase_transactions(transactions)
     lots['purchasePrice'] = lots['amount'].abs() / lots['shares']  # save actual market price per share
@@ -62,17 +67,37 @@ def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionS
         return TaxLotSchema.validate(lots)
 
     sell_transactions = transactions.pipe(filter_by_type, transaction_types=[TransactionType.SELL, TransactionType.DELIVERY_OUTBOUND])
-    if sell_transactions.empty:
+    transfer_out_transactions = transactions.pipe(filter_by_type, transaction_types=[TransactionType.TRANSFER_OUT])
+    transfer_in_transactions = transactions.pipe(filter_by_type, transaction_types=[TransactionType.TRANSFER_IN])
+
+    # Build lookup from (date, securityId, shares) → destination accountId for transfer matching
+    transfer_in_lookup: dict[tuple, str] = {}
+    if not transfer_in_transactions.empty:
+        for (date, dest_account_id, security_id), row in transfer_in_transactions.iterrows():
+            key = (date, security_id, round(float(row['shares']), 4))
+            transfer_in_lookup[key] = dest_account_id
+
+    # Combine sells and transfer-outs into a single chronologically sorted sequence
+    outgoing_frames = [f for f in [sell_transactions, transfer_out_transactions] if not f.empty]
+    if not outgoing_frames:
         return TaxLotSchema.validate(lots)
+    all_outgoing = pd.concat(outgoing_frames).sort_index(level='date') if len(outgoing_frames) > 1 else outgoing_frames[0].sort_index(level='date')
 
     # Convert to list of dicts for fast mutation during FIFO matching
     remaining_lots = lots.reset_index().to_dict('records')
-    sales_sorted = sell_transactions.sort_index(level='date')
 
-    for (_date, account_id, _security_id), row in sales_sorted.iterrows():
+    for (_date, account_id, _security_id), row in all_outgoing.iterrows():
+        is_transfer_out = str(row['type']) == TransactionType.TRANSFER_OUT.name
         shares_to_match = float(row['shares'])
 
-        # Match against lots in FIFO order (only from same account)
+        dest_account_id = None
+        if is_transfer_out:
+            key = (_date, _security_id, round(shares_to_match, 4))
+            dest_account_id = transfer_in_lookup.get(key)
+            if dest_account_id is None:
+                log.warning('No matching TRANSFER_IN for TRANSFER_OUT of %.4f shares of %s on %s — lots will be dropped', shares_to_match, _security_id, _date)
+
+        transferred_lots: list[dict] = []
         for lot in remaining_lots:
             if shares_to_match <= 0:
                 break
@@ -86,14 +111,26 @@ def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionS
             new_shares = lot_shares - shares_from_lot
             shares_to_match -= shares_from_lot
 
-            # Proportionally reduce fees based on remaining shares
+            if is_transfer_out and dest_account_id:
+                # Move lot to destination account, preserving original acquisition cost
+                ratio = shares_from_lot / lot_shares if lot_shares > 0 else 0
+                transferred_lots.append({
+                    **lot,
+                    'accountId': dest_account_id,
+                    'shares': shares_from_lot,
+                    'fees': lot['fees'] * ratio,
+                })
+
+            # Proportionally reduce fees on the remaining portion of the source lot
             if lot_shares > 0:
                 lot['fees'] = lot['fees'] * (new_shares / lot_shares)
-
             lot['shares'] = new_shares
 
+        if is_transfer_out:
+            remaining_lots.extend(transferred_lots)
+
         if shares_to_match > 0.0001:  # Allow small floating point errors
-            log.warning('Sale of %.8f shares for security %s could not be fully matched to purchase lots', shares_to_match, _security_id)
+            log.warning('Sale/transfer of %.8f shares for security %s could not be fully matched to purchase lots', shares_to_match, _security_id)
 
     # Filter out exhausted lots and convert back to DataFrame
     remaining_lots = [lot for lot in remaining_lots if lot['shares'] > 0.0001]

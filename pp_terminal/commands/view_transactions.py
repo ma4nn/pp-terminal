@@ -28,7 +28,7 @@ from pp_terminal.data.filters import (
     filter_by_account, filter_by_security, filter_by_type,
     filter_earlier_than, filter_later_than,
 )
-from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
+from pp_terminal.domain.portfolio import Portfolio, get_security_by_id, resolve_security_id
 from pp_terminal.domain.schemas import TransactionType
 from pp_terminal.exceptions import InputError
 from pp_terminal.output.strategy import OutputStrategy, Console
@@ -101,13 +101,10 @@ def view_transactions(  # pylint: disable=too-many-arguments,too-many-positional
 
     security_id = None
     if security:
-        isin_matches = portfolio.securities.index[portfolio.securities['isin'] == security]
-        if len(isin_matches) == 1:
-            security_id = str(isin_matches[0])
-        elif security in portfolio.securities.index:
-            security_id = security
-        else:
-            raise typer.BadParameter(f"Security '{security}' not found by ID or ISIN")
+        try:
+            security_id = resolve_security_id(portfolio, security)
+        except InputError as e:
+            raise typer.BadParameter(str(e)) from e
 
     transaction_types = _parse_types(types)
 

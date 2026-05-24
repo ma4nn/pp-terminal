@@ -214,15 +214,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """
         portfolio = _ensure_fresh_portfolio()
 
-        security_id = None
-        if security:
-            isin_matches = portfolio.securities.index[portfolio.securities['isin'] == security]
-            if len(isin_matches) == 1:
-                security_id = str(isin_matches[0])
-            elif security in portfolio.securities.index:
-                security_id = security
-            else:
-                raise InputError(f"Security '{security}' not found by ID or ISIN")
+        security_id = _resolve_security(portfolio, security) if security else None
 
         parsed_types = None
         if transaction_type:

@@ -19,6 +19,7 @@
 
 from datetime import datetime
 import logging
+from typing import Any
 
 import pandas as pd
 from pandera.typing import DataFrame
@@ -37,8 +38,8 @@ def _filter_purchase_transactions(transactions: DataFrame[TransactionSchema]) ->
     return TransactionSchema.validate(valid_purchases)
 
 
-def _build_transfer_in_lookup(transfer_in_transactions: DataFrame[TransactionSchema]) -> dict[tuple, str]:
-    lookup: dict[tuple, str] = {}
+def _build_transfer_in_lookup(transfer_in_transactions: DataFrame[TransactionSchema]) -> dict[tuple[object, ...], str]:
+    lookup: dict[tuple[object, ...], str] = {}
     for (date, dest_account_id, security_id), row in transfer_in_transactions.iterrows():
         key = (date, security_id, round(float(row['shares']), 4))
         lookup[key] = dest_account_id
@@ -46,12 +47,12 @@ def _build_transfer_in_lookup(transfer_in_transactions: DataFrame[TransactionSch
 
 
 def _consume_lots_fifo(
-        remaining_lots: list[dict],
+        remaining_lots: list[dict[str, Any]],
         account_id: str,
         shares_to_match: float,
         dest_account_id: str | None,
-) -> tuple[float, list[dict]]:
-    transferred_lots: list[dict] = []
+) -> tuple[float, list[dict[str, Any]]]:
+    transferred_lots: list[dict[str, Any]] = []
     for lot in remaining_lots:
         if shares_to_match <= 0:
             break

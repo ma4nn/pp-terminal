@@ -90,6 +90,25 @@ def test_view_securities_csv_output(request: TopRequest) -> None:
     assert result.output == expected_output
 
 
+def test_view_transactions_csv_output(request: TopRequest) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+    xml_file = fixtures_dir / 'kommer.ids.xml'
+    golden_file = fixtures_dir / 'expected_view_transactions_kommer.csv'
+
+    result = runner.invoke(app, [
+        '--file', str(xml_file),
+        '--output', 'csv',
+        '--no-cache',
+        'view', 'transactions'
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    expected_output = Path(golden_file).read_text(encoding='utf-8')
+    assert result.output == expected_output
+
+
 def test_view_accounts_json_output(request: TopRequest) -> None:
     runner = CliRunner()
     fixtures_dir = request.path.parent.parent / 'fixtures'

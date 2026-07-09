@@ -27,7 +27,7 @@ from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.utils.config import get_command_config
 from .base import ValidationRule
-from .rules import create_rule, get_applicable_rules
+from .rules import create_built_in_securities_rules, create_rule, get_applicable_rules
 
 
 @dataclass
@@ -121,7 +121,7 @@ def validate_securities(
     portfolio: Portfolio,
     config: dict[str, Any]
 ) -> dict[str, ValidationResult]:
-    rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.securities.rules', [])]
+    rules = create_built_in_securities_rules() + [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.securities.rules', [])]
 
     latest_prices = portfolio.prices.groupby(['securityId']).tail(1)
 

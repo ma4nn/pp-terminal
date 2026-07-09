@@ -146,20 +146,31 @@ def test_should_skip_broken_schema_fragments(monkeypatch: pytest.MonkeyPatch, tm
     assert 'simulate.invalid-schema' in caplog.text
     assert 'simulate.with-ref' in caplog.text
 
-def test_should_not_mutate_plugin_fragments_when_mounting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """A nested mount path traverses an earlier fragment; only a deep copy may be modified, and re-merges must stay stable."""
+def test_should_reject_mounting_inside_another_plugins_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mount path nested inside an earlier fragment is a name conflict, and the fragment constant must stay pristine."""
     _install_fragments(monkeypatch, {
         'simulate': 'tests.utils.test_config:PLUGIN_SCHEMA',
         'simulate.foo': 'tests.utils.test_config:OTHER_PLUGIN_SCHEMA',
     })
     pristine = json.dumps(PLUGIN_SCHEMA, sort_keys=True)
 
-    _merged_schema()
-    _merged_schema.cache_clear()
-    _merged_schema()
+    with pytest.raises(RuntimeError, match=r'commands\.simulate\.foo'):
+        _merged_schema()
 
     assert json.dumps(PLUGIN_SCHEMA, sort_keys=True) == pristine
-    assert validated_toml_loader(_write_config(tmp_path, '[commands.simulate]\nyears = 40\n'))
+
+def test_should_skip_fragment_with_too_deep_command_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Entry point names have at most two segments, so a core leaf section can never be extended from within."""
+    _install_fragments(monkeypatch, {'view.accounts.evilchild': 'tests.utils.test_config:PLUGIN_SCHEMA'})
+
+    with caplog.at_level(logging.ERROR):
+        result = validated_toml_loader(_write_config(tmp_path, '[commands.view.accounts]\nfields = ["Name"]\n'))
+
+    assert get_command_config(result, 'view.accounts.fields') == ['Name']
+    assert 'view.accounts.evilchild' in caplog.text
+
+    with pytest.raises(JsonSchemaValidationError, match=r"'evilchild' was unexpected"):
+        validated_toml_loader(_write_config(tmp_path, '[commands.view.accounts.evilchild]\nyears = 1\n'))
 
 def test_should_keep_schema_unchanged_without_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fragments(monkeypatch, {})

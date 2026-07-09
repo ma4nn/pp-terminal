@@ -77,11 +77,17 @@ def _contains_ref(node: Any) -> bool:
     return False
 
 
-def _mount_schema_fragment(commands_schema: dict[str, Any], command_path: str, fragment: dict[str, Any]) -> None:
+def _mount_schema_fragment(commands_schema: dict[str, Any], command_path: str, fragment: dict[str, Any], group_nodes: set[int]) -> None:
     node = commands_schema
     segments = command_path.split('.')
     for segment in segments[:-1]:
-        node = node.setdefault('properties', {}).setdefault(segment, {'type': 'object', 'additionalProperties': False})
+        properties = node.setdefault('properties', {})
+        if segment not in properties:
+            properties[segment] = {'type': 'object', 'additionalProperties': False}
+            group_nodes.add(id(properties[segment]))
+        elif id(properties[segment]) not in group_nodes:
+            raise RuntimeError(f'cannot mount "commands.{command_path}" inside the already defined section "commands.{segment}"')
+        node = properties[segment]
 
     properties = node.setdefault('properties', {})
     if segments[-1] in properties:
@@ -93,10 +99,15 @@ def _mount_schema_fragment(commands_schema: dict[str, Any], command_path: str, f
 @cache
 def _merged_schema() -> dict[str, Any]:
     schema = _load_schema()
+    commands_schema = schema['properties']['commands']
+    # core sections are traversable groups; plugin-mounted fragments are not
+    group_nodes = {id(node) for node in commands_schema.get('properties', {}).values()}
 
     entry_points = sorted(importlib.metadata.entry_points(group="pp_terminal.config_schema"), key=lambda ep: ep.name)
     for entry_point in entry_points:
         try:
+            if len(entry_point.name.split('.')) > 2:
+                raise ValueError('entry point name must be "<command>" or "<group>.<command>"')
             fragment = entry_point.load()
             if not isinstance(fragment, dict):
                 raise TypeError('not a dict')
@@ -107,7 +118,7 @@ def _merged_schema() -> dict[str, Any]:
             log.error("failed to load config schema fragment %s, ignoring: %s", entry_point.name, e)
             continue
 
-        _mount_schema_fragment(schema['properties']['commands'], entry_point.name, copy.deepcopy(fragment))
+        _mount_schema_fragment(commands_schema, entry_point.name, copy.deepcopy(fragment), group_nodes)
 
     return schema
 

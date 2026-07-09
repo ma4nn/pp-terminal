@@ -309,7 +309,8 @@ CONFIG_SCHEMA = {
 
 Users can then configure `[commands.simulate.safe-withdrawal]` in their config file, and the command reads the validated values
 via `get_command_config(config, 'simulate.safe-withdrawal.years')`. Redefining a section that _pp-terminal_ itself or another
-plugin already provides is rejected. Fragments must be self-contained Draft-7 object schemas; `$ref` is not supported.
+plugin already provides — or mounting inside one — is rejected. Entry point names have at most two segments (`<command>` or
+`<group>.<command>`), and fragments must be self-contained Draft-7 object schemas; `$ref` is not supported.
 
 The app uses [Typer](https://typer.tiangolo.com/) for composing the commands and [Rich](https://github.com/Textualize/rich)
 for nice console outputs. The Portfolio Performance XML file is read with [ppxml2db](https://github.com/pfalcon/ppxml2db) 

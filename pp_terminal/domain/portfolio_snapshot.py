@@ -91,7 +91,7 @@ class PortfolioSnapshot:
         ]).groupby(['accountId', 'securityId', 'currency'])['shares'].sum()
         shares.name = 'shares'
 
-        return shares[shares > 0]
+        return shares[shares != 0]
 
     @property
     def values(self) -> pd.Series:

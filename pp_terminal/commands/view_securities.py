@@ -69,7 +69,7 @@ def prepare_securities_df(
         df = df[~df['isRetired']]
 
     if in_stock:
-        df = df[df['shares'] > 0.001]
+        df = df[df['shares'].abs() > 0.001]
 
     validation_results = validate_securities(portfolio, config)
     df['messages'] = df['securityId'].map(

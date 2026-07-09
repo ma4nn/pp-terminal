@@ -46,7 +46,9 @@ def provide_securities_portfolio() -> Portfolio:
         ['MSCI World ETF', 'IE00B4L5Y983', 'EUR'],
         ['S&P 500 ETF', 'IE00B5BMR087', 'USD'],
         ['No Holdings Security', 'IE00000000000', 'EUR'],
-    ], columns=['name', 'wkn', 'currency'], index=['sec1', 'sec2', 'sec3'])
+        ['Put DAX 18000 Dec25', 'OPT001', 'EUR'],            # short (written)
+        ['Closed Position', 'FLAT01', 'EUR'],                # flat / net zero
+    ], columns=['name', 'wkn', 'currency'], index=['sec1', 'sec2', 'sec3', 'opt1', 'flat1'])
     securities.index.name = 'securityId'
 
     transactions = pd.DataFrame([
@@ -54,6 +56,11 @@ def provide_securities_portfolio() -> Portfolio:
         [datetime(2023, 6, 10), 'depot1', 'sec1', TransactionType.BUY.value, 7000.0, 30.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
         [datetime(2024, 1, 5), 'depot1', 'sec1', TransactionType.SELL.value, 2000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
         [datetime(2023, 3, 20), 'depot1', 'sec2', TransactionType.BUY.value, 9000.0, 25.5, AccountType.SECURITIES.value, 'USD', 0.0],
+        # short: written put, sold-to-open 2 contracts, no inbound -> net -2
+        [datetime(2024, 3, 1), 'depot1', 'opt1', TransactionType.SELL.value, 600.0, 2.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        # flat: buy 10, sell 10 -> net 0
+        [datetime(2023, 2, 1), 'depot1', 'flat1', TransactionType.BUY.value, 1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        [datetime(2023, 9, 1), 'depot1', 'flat1', TransactionType.SELL.value, 1100.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
     ], columns=['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees'])
     transactions = transactions.set_index(['date', 'accountId', 'securityId'])
 
@@ -61,6 +68,8 @@ def provide_securities_portfolio() -> Portfolio:
         [datetime(2024, 12, 31), 'sec1', 100.0],
         [datetime(2024, 12, 31), 'sec2', 200.0],
         [datetime(2024, 12, 31), 'sec3', 50.0],
+        [datetime(2024, 12, 31), 'opt1', 30.0],
+        [datetime(2024, 12, 31), 'flat1', 50.0],
     ], columns=['date', 'securityId', 'price'])
     prices = prices.set_index(['date', 'securityId'])
 
@@ -149,6 +158,25 @@ def test_list_securities_share_calculation(securities_portfolio: Portfolio) -> N
     assert shares_by_security.loc['sec1'] == pytest.approx(70.0)  # 50 + 30 - 10
     assert shares_by_security.loc['sec2'] == pytest.approx(25.5)
     assert 'sec3' not in shares_by_security.index  # No transactions
+    assert shares_by_security.loc['opt1'] == pytest.approx(-2.0)  # short kept with sign
+    assert 'flat1' not in shares_by_security.index  # net zero stays excluded
+
+
+def test_list_securities_in_stock_includes_shorts(securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
+    """`view securities --in-stock` must list shorts and still hide flat positions."""
+    ctx = Context(Mock())
+    ctx.obj = Mock()
+    ctx.obj.portfolio = securities_portfolio
+    ctx.obj.output = RichOutputStrategy()
+    ctx.obj.config = {}
+
+    print_securities(ctx, by=datetime(2024, 12, 31), in_stock=True)
+
+    output = capsys.readouterr().out
+
+    assert 'MSCI World ETF' in output       # long shown
+    assert 'Put DAX 18000' in output        # short shown (was hidden before the fix)
+    assert 'Closed Position' not in output  # flat / net zero filtered out
 
 
 def test_list_securities_sorted_by_name(securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:

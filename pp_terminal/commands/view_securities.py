@@ -71,7 +71,7 @@ def prepare_securities_df(
     if in_stock:
         df = df[df['shares'] > 0.001]
 
-    validation_results = validate_securities(portfolio, config)
+    validation_results = validate_securities(portfolio, snapshot, config)
     df['messages'] = df['securityId'].map(
         lambda sid: validation_results.get(str(sid), ValidationResult.empty()).messages or ''
     )

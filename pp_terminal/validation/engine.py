@@ -26,8 +26,8 @@ from pp_terminal.data.filters import filter_not_retired
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.utils.config import get_command_config
-from .base import ValidationRule
-from .rules import create_built_in_securities_rules, create_rule, get_applicable_rules
+from pp_terminal.validation.base import ValidationRule
+from pp_terminal.validation.rules import create_built_in_securities_rules, create_rule, get_applicable_rules
 
 
 @dataclass
@@ -119,9 +119,12 @@ def validate_accounts(
 
 def validate_securities(
     portfolio: Portfolio,
+    snapshot: PortfolioSnapshot,
     config: dict[str, Any]
 ) -> dict[str, ValidationResult]:
-    rules = create_built_in_securities_rules() + [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.securities.rules', [])]
+    user_rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.securities.rules', [])]
+    configured_types = {rule.rule_type for rule in user_rules}
+    rules = [rule for rule in create_built_in_securities_rules() if rule.rule_type not in configured_types] + user_rules
 
     latest_prices = portfolio.prices.groupby(['securityId']).tail(1)
 
@@ -138,11 +141,12 @@ def validate_securities(
 
     base_context = {
         'portfolio': portfolio,
+        'snapshot': snapshot,
         'config': config,
     }
 
     for rule in rules:
-        base_context.update(rule.__class__.provide_context(portfolio, config))
+        base_context.update(rule.__class__.provide_context(portfolio, snapshot, config))
 
     results = {}
     for security_id, security in securities_with_prices.iterrows():

@@ -38,9 +38,9 @@ class PortfolioSnapshot:
     _per_date: datetime
     _portfolio: Portfolio
 
-    def __init__(self, portfolio: Portfolio, per_date: datetime = datetime.now()):
+    def __init__(self, portfolio: Portfolio, per_date: datetime | None = None):
         self._portfolio = portfolio
-        self._per_date = per_date
+        self._per_date = per_date if per_date is not None else datetime.now()
 
     @property
     def date(self) -> datetime:

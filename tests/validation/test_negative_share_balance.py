@@ -26,12 +26,12 @@ import pytest
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType, TransactionType
-from pp_terminal.validation.engine import validate_securities
+from pp_terminal.validation.engine import validate_securities, ValidationResult
 
 
 @pytest.fixture(name='portfolio_with_negative_balances')
 def provide_portfolio_with_negative_balances() -> Portfolio:
-    """Portfolio with a healthy, an oversold, a cross-account inconsistent, a flat and a dust-residue security."""
+    """Portfolio with a healthy, an oversold, a cross-account inconsistent, a flat, a dust-residue and a forex-legged security."""
     accounts = pd.DataFrame([
         ['Account 1', AccountType.SECURITIES.value, None, False, 'EUR'],
         ['Account 2', AccountType.SECURITIES.value, None, False, 'EUR'],
@@ -45,8 +45,9 @@ def provide_portfolio_with_negative_balances() -> Portfolio:
         ['Security Cross Account', 'CCC', 'ISIN-C', None, False, 'EUR'],
         ['Security Flat', 'DDD', 'ISIN-D', None, False, 'EUR'],
         ['Security Dust', 'EEE', 'ISIN-E', None, False, 'EUR'],
+        ['Security Forex', 'FFF', 'ISIN-F', None, False, 'USD'],
     ], columns=['name', 'wkn', 'isin', 'note', 'isRetired', 'currency'],
-       index=['sec-ok', 'sec-oversold', 'sec-cross', 'sec-flat', 'sec-dust'])
+       index=['sec-ok', 'sec-oversold', 'sec-cross', 'sec-flat', 'sec-dust', 'sec-forex'])
     securities.index.name = 'securityId'
 
     prices = pd.DataFrame([
@@ -55,6 +56,7 @@ def provide_portfolio_with_negative_balances() -> Portfolio:
         [datetime(2023, 1, 1), 'sec-cross', 100.0],
         [datetime(2023, 1, 1), 'sec-flat', 100.0],
         [datetime(2023, 1, 1), 'sec-dust', 100.0],
+        [datetime(2023, 1, 1), 'sec-forex', 100.0],
     ], columns=['date', 'securityId', 'price'])
     prices = prices.set_index(['date', 'securityId'])
 
@@ -73,6 +75,9 @@ def provide_portfolio_with_negative_balances() -> Portfolio:
         # dust residue below tolerance: -0.0005
         [datetime(2020, 1, 15), 'acc-1', 'sec-dust', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
         [datetime(2021, 2, 1), 'acc-1', 'sec-dust', TransactionType.SELL.value, 1000.0, 10.0005, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        # forex legs: buy recorded in EUR, sell carries forex currency USD -> net 0 shares despite split currency slices
+        [datetime(2020, 1, 15), 'acc-1', 'sec-forex', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        [datetime(2021, 2, 1), 'acc-1', 'sec-forex', TransactionType.SELL.value, 1100.0, 10.0, AccountType.SECURITIES.value, 'USD', 0.0, 0.0],
     ], columns=['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees'])
     transactions = transactions.set_index(['date', 'accountId', 'securityId'])
 
@@ -84,36 +89,69 @@ def provide_portfolio_with_negative_balances() -> Portfolio:
     )
 
 
-def test_negative_balance_warning_without_config(portfolio_with_negative_balances: Portfolio) -> None:
+@pytest.fixture(name='validation_results')
+def provide_validation_results(portfolio_with_negative_balances: Portfolio) -> dict[str, ValidationResult]:
+    """Built-in rule run with empty configuration, evaluated per 2023-01-01."""
+    snapshot = PortfolioSnapshot(portfolio_with_negative_balances, datetime(2023, 1, 1))
+    return validate_securities(portfolio_with_negative_balances, snapshot, {})
+
+
+def test_negative_balance_warning_without_config(validation_results: dict[str, ValidationResult]) -> None:
     """The rule is built-in and must run even with an empty configuration."""
-    results = validate_securities(portfolio_with_negative_balances, {})
+    assert len(validation_results['sec-oversold'].violations) == 1
+    assert 'negative share balance' in validation_results['sec-oversold'].messages
+    assert '-3.00 in "Account 1"' in validation_results['sec-oversold'].messages
+
+
+def test_negative_balance_is_warning_not_error(validation_results: dict[str, ValidationResult]) -> None:
+    assert not validation_results['sec-oversold'].has_errors
+    assert '⚠️' in validation_results['sec-oversold'].messages
+
+
+def test_negative_balance_in_one_account_despite_positive_net(validation_results: dict[str, ValidationResult]) -> None:
+    """A negative balance in one account must be flagged even if the net across accounts is positive."""
+    assert len(validation_results['sec-cross'].violations) == 1
+    assert '-3.00 in "Account 2"' in validation_results['sec-cross'].messages
+
+
+def test_no_warning_for_healthy_flat_and_dust_positions(validation_results: dict[str, ValidationResult]) -> None:
+    assert not validation_results['sec-ok'].violations
+    assert not validation_results['sec-flat'].violations
+    assert not validation_results['sec-dust'].violations  # residue below tolerance
+
+
+def test_no_warning_for_forex_legs_netting_to_zero(validation_results: dict[str, ValidationResult]) -> None:
+    """Buy and sell legs recorded in different currencies must be netted per account, not per currency slice."""
+    assert not validation_results['sec-forex'].violations
+
+
+def test_balances_are_evaluated_per_snapshot_date(portfolio_with_negative_balances: Portfolio) -> None:
+    """Before the oversell happened, the same portfolio must validate clean."""
+    snapshot = PortfolioSnapshot(portfolio_with_negative_balances, datetime(2020, 6, 1))
+    results = validate_securities(portfolio_with_negative_balances, snapshot, {})
+
+    assert not results['sec-oversold'].violations
+
+
+def test_user_configured_rule_replaces_built_in(portfolio_with_negative_balances: Portfolio) -> None:
+    config = {'commands': {'validate': {'securities': {'rules': [
+        {'type': 'negative-share-balance', 'severity': 'error', 'tolerance': 0.001},
+    ]}}}}
+    snapshot = PortfolioSnapshot(portfolio_with_negative_balances, datetime(2023, 1, 1))
+    results = validate_securities(portfolio_with_negative_balances, snapshot, config)
 
     assert len(results['sec-oversold'].violations) == 1
-    assert 'negative share balance' in results['sec-oversold'].messages
-    assert '-3.00 in "Account 1"' in results['sec-oversold'].messages
+    assert results['sec-oversold'].has_errors
 
 
-def test_negative_balance_is_warning_not_error(portfolio_with_negative_balances: Portfolio) -> None:
-    results = validate_securities(portfolio_with_negative_balances, {})
+def test_built_in_rule_can_be_disabled_via_valid_months(portfolio_with_negative_balances: Portfolio) -> None:
+    config = {'commands': {'validate': {'securities': {'rules': [
+        {'type': 'negative-share-balance', 'valid-months': []},
+    ]}}}}
+    snapshot = PortfolioSnapshot(portfolio_with_negative_balances, datetime(2023, 1, 1))
+    results = validate_securities(portfolio_with_negative_balances, snapshot, config)
 
-    assert not results['sec-oversold'].has_errors
-    assert '⚠️' in results['sec-oversold'].messages
-
-
-def test_negative_balance_in_one_account_despite_positive_net(portfolio_with_negative_balances: Portfolio) -> None:
-    """A negative balance in one account must be flagged even if the net across accounts is positive."""
-    results = validate_securities(portfolio_with_negative_balances, {})
-
-    assert len(results['sec-cross'].violations) == 1
-    assert '-3.00 in "Account 2"' in results['sec-cross'].messages
-
-
-def test_no_warning_for_healthy_flat_and_dust_positions(portfolio_with_negative_balances: Portfolio) -> None:
-    results = validate_securities(portfolio_with_negative_balances, {})
-
-    assert not results['sec-ok'].violations
-    assert not results['sec-flat'].violations
-    assert not results['sec-dust'].violations  # residue below tolerance
+    assert not results['sec-oversold'].violations
 
 
 def test_share_balances_include_negatives_but_shares_do_not(portfolio_with_negative_balances: Portfolio) -> None:

@@ -20,14 +20,20 @@
 
 import logging
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 import pytest
 
 from pp_terminal.domain.portfolio import Portfolio
+from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType, TransactionType
-from pp_terminal.validation.engine import validate_securities
+from pp_terminal.validation.engine import validate_securities, ValidationResult
 from pp_terminal.validation.rules import CostBasisLimitRule
+
+
+def _validate_securities(portfolio: Portfolio, config: dict[str, Any]) -> dict[str, ValidationResult]:
+    return validate_securities(portfolio, PortfolioSnapshot(portfolio, datetime(2023, 12, 31)), config)
 
 
 @pytest.fixture(name='portfolio_with_purchases_and_sales')
@@ -94,7 +100,7 @@ def provide_tax_csv_data_df() -> pd.DataFrame:
 
 def test_no_validation_config(portfolio_with_purchases_and_sales: Portfolio) -> None:
     """Test that validation completes successfully when no validation config exists."""
-    results = validate_securities(portfolio_with_purchases_and_sales, {})
+    results = _validate_securities(portfolio_with_purchases_and_sales, {})
 
     assert len(results) == 3
     assert all(not result.has_errors for result in results.values())
@@ -114,7 +120,7 @@ def test_cost_basis_limit_pass(portfolio_with_purchases_and_sales: Portfolio) ->
         }
     }
 
-    results = validate_securities(portfolio_with_purchases_and_sales, config)
+    results = _validate_securities(portfolio_with_purchases_and_sales, config)
 
     # All securities should pass (sec-a: €4500, sec-b: €2000, sec-c: €0)
     assert all(not result.has_errors for result in results.values())
@@ -134,7 +140,7 @@ def test_cost_basis_limit_fail(portfolio_with_purchases_and_sales: Portfolio) ->
         }
     }
 
-    results = validate_securities(portfolio_with_purchases_and_sales, config)
+    results = _validate_securities(portfolio_with_purchases_and_sales, config)
 
     # sec-a should fail
     assert results['sec-a'].has_errors
@@ -161,7 +167,7 @@ def test_entity_specific_rule(portfolio_with_purchases_and_sales: Portfolio) -> 
         }
     }
 
-    results = validate_securities(portfolio_with_purchases_and_sales, config)
+    results = _validate_securities(portfolio_with_purchases_and_sales, config)
 
     # Only sec-a should be validated and fail
     assert results['sec-a'].has_errors
@@ -198,7 +204,7 @@ def test_attribute_based_rule(portfolio_with_purchases_and_sales: Portfolio) -> 
         }
     }
 
-    results = validate_securities(modified_portfolio, config)
+    results = _validate_securities(modified_portfolio, config)
 
     # sec-a should pass
     assert not results['sec-a'].has_errors
@@ -222,7 +228,7 @@ def test_warning_severity(portfolio_with_purchases_and_sales: Portfolio) -> None
         }
     }
 
-    results = validate_securities(portfolio_with_purchases_and_sales, config)
+    results = _validate_securities(portfolio_with_purchases_and_sales, config)
 
     # sec-a should have a violation but not an error (warning severity)
     assert len(results['sec-a'].violations) > 0
@@ -245,7 +251,7 @@ def test_mixed_severities(portfolio_with_purchases_and_sales: Portfolio) -> None
         }
     }
 
-    results = validate_securities(portfolio_with_purchases_and_sales, config)
+    results = _validate_securities(portfolio_with_purchases_and_sales, config)
 
     # sec-a should have warning
     assert len(results['sec-a'].violations) > 0
@@ -284,7 +290,7 @@ def test_multiple_accounts_aggregated(portfolio_with_purchases_and_sales: Portfo
         }
     }
 
-    results = validate_securities(portfolio, config)
+    results = _validate_securities(portfolio, config)
 
     # sec-a should fail (acc-1: €5500 + acc-2: €500 = €6000 > €4500)
     assert results['sec-a'].has_errors

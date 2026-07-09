@@ -70,7 +70,7 @@ def log_validate_securities(ctx: typer.Context) -> None:
     portfolio = cast(Portfolio, ctx.obj.portfolio)
     config = cast(Config, ctx.obj.config)
 
-    results = validate_securities(portfolio, config)
+    results = validate_securities(portfolio, PortfolioSnapshot(portfolio, datetime.now()), config)
 
     if not results:
         log.debug('No security validation rules configured or no securities to validate')

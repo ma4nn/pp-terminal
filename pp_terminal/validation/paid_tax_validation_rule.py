@@ -47,7 +47,7 @@ class PaidTaxValidationRule(ValidationRule):
     """Validates calculated VAP base yield against paid tax data from CSV files."""
 
     @classmethod
-    def provide_context(cls, portfolio: Portfolio, config: dict[str, Any]) -> dict[str, Any]:
+    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: dict[str, Any]) -> dict[str, Any]:
         tax_files = get_tax_files(config)
         tax_csv_data: DataFrame[TaxPaidSchema] | None = load_prepaid_tax_data(tax_files, portfolio) if tax_files else None
 

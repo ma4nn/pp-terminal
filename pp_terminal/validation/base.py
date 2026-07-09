@@ -25,6 +25,7 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from pp_terminal.domain.portfolio import Portfolio
+    from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class ValidationRule(ABC):
         self.tolerance = tolerance
 
     @classmethod
-    def provide_context(cls, portfolio: 'Portfolio', config: dict[str, Any]) -> dict[str, Any]:  # pylint: disable=unused-argument
+    def provide_context(cls, portfolio: 'Portfolio', snapshot: 'PortfolioSnapshot', config: dict[str, Any]) -> dict[str, Any]:  # pylint: disable=unused-argument
         """Override to contribute data to shared validation context."""
         return {}
 

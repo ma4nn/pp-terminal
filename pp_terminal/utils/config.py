@@ -17,9 +17,12 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
+import copy
+import importlib.metadata
 import json
 import logging
 import os
+from functools import cache
 from pathlib import Path
 from typing import Any, Dict, cast
 
@@ -66,6 +69,49 @@ def _load_schema() -> dict[str, Any]:
         return cast(dict[str, Any], json.load(f))
 
 
+def _contains_ref(node: Any) -> bool:
+    if isinstance(node, dict):
+        return '$ref' in node or any(_contains_ref(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_ref(value) for value in node)
+    return False
+
+
+def _mount_schema_fragment(commands_schema: dict[str, Any], command_path: str, fragment: dict[str, Any]) -> None:
+    node = commands_schema
+    segments = command_path.split('.')
+    for segment in segments[:-1]:
+        node = node.setdefault('properties', {}).setdefault(segment, {'type': 'object', 'additionalProperties': False})
+
+    properties = node.setdefault('properties', {})
+    if segments[-1] in properties:
+        raise RuntimeError(f'config schema section "commands.{command_path}" is already defined, refusing to override')
+
+    properties[segments[-1]] = fragment
+
+
+@cache
+def _merged_schema() -> dict[str, Any]:
+    schema = _load_schema()
+
+    entry_points = sorted(importlib.metadata.entry_points(group="pp_terminal.config_schema"), key=lambda ep: ep.name)
+    for entry_point in entry_points:
+        try:
+            fragment = entry_point.load()
+            if not isinstance(fragment, dict):
+                raise TypeError('not a dict')
+            Draft7Validator.check_schema(fragment)
+            if _contains_ref(fragment):
+                raise ValueError('fragments must be self-contained, "$ref" is not supported')
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            log.error("failed to load config schema fragment %s, ignoring: %s", entry_point.name, e)
+            continue
+
+        _mount_schema_fragment(schema['properties']['commands'], entry_point.name, copy.deepcopy(fragment))
+
+    return schema
+
+
 def validated_toml_loader(config_path: str) -> Config:
     """
     Load and validate TOML configuration file for use with typer-config.
@@ -82,8 +128,7 @@ def validated_toml_loader(config_path: str) -> Config:
 
     config = toml_loader(config_path)
 
-    schema = _load_schema()
-    validator = Draft7Validator(schema)
+    validator = Draft7Validator(_merged_schema())
 
     errors = sorted(validator.iter_errors(config), key=lambda e: e.path)
     if errors:

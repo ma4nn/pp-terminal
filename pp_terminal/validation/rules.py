@@ -26,6 +26,7 @@ from pp_terminal.data.filters import filter_by_security
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
+from pp_terminal.domain.schemas import TransactionType
 from pp_terminal.validation.base import ValidationRule
 from pp_terminal.validation.vap_liquidity_rule import VapLiquidityRule
 from pp_terminal.validation.paid_tax_validation_rule import PaidTaxValidationRule
@@ -176,10 +177,50 @@ class NegativeShareBalanceRule(ValidationRule):
         return self.is_error(), message
 
 
+class UnlinkedDepotTransferRule(ValidationRule):
+    """Flags securities with a depot transfer (TRANSFER_OUT) that has no linked destination account.
+    Portfolio Performance records the destination via a cross-entry link; a missing link indicates
+    corrupt or stale-cache data, and the transferred shares' cost basis stays attributed to the
+    source account instead of the destination."""
+
+    @classmethod
+    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: dict[str, Any]) -> dict[str, Any]:
+        transactions = portfolio.securities_account_transactions
+        transfer_outs = transactions[transactions['type'] == TransactionType.TRANSFER_OUT.name]
+        if 'transferTargetAccount' not in transfer_outs.columns:
+            transfer_outs = transfer_outs.iloc[0:0]  # column absent: cannot assess (e.g. legacy/hand-built frames)
+        else:
+            target = transfer_outs['transferTargetAccount']
+            transfer_outs = transfer_outs[target.isna() | (target.fillna('').astype(str).str.strip() == '')]
+        return {
+            'unlinked_transfers': transfer_outs,
+            'account_names': portfolio.securities_accounts['name'],
+        }
+
+    def validate(self, entity: pd.Series, entity_id: str, context: dict[str, Any]) -> tuple[bool, str | None]:
+        is_error, message = super().validate(entity, entity_id, context)
+        if not self._should_apply():
+            return is_error, message
+
+        unlinked = context['unlinked_transfers']
+        security_transfers = unlinked[unlinked.index.get_level_values('securityId') == entity_id]
+        if security_transfers.empty:
+            return False, None
+
+        account_names = context['account_names']
+        details = ', '.join(
+            f'{shares:.2f} from "{account_names.get(account_id, account_id)}"'
+            for (_date, account_id, _sec), shares in security_transfers['shares'].items()
+        )
+        message = f'has a depot transfer with no linked destination account ({details}); cost basis stays with the source account (corrupt or stale-cache data)'
+        return self.is_error(), message
+
+
 def create_built_in_securities_rules() -> list[ValidationRule]:
     """Data-integrity rules that run by default; a user-configured rule of the same type replaces the built-in one."""
     return [
         NegativeShareBalanceRule(rule_type='negative-share-balance', value=None, severity='warning', tolerance=0.001),
+        UnlinkedDepotTransferRule(rule_type='unlinked-depot-transfer', value=None, severity='warning'),
     ]
 
 
@@ -195,6 +236,7 @@ _RULE_TYPES = {
     'vap-liquidity': VapLiquidityRule,
     'paid-tax-validation': PaidTaxValidationRule,
     'negative-share-balance': NegativeShareBalanceRule,
+    'unlinked-depot-transfer': UnlinkedDepotTransferRule,
 }
 
 

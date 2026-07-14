@@ -76,6 +76,7 @@ class TransactionSchema(pa.DataFrameModel):
     taxes: Series[Money] = pa.Field(default=0.0)
     fees: Optional[Series[Money]] = pa.Field(default=0.0, coerce=True)
     currency: Series[str] = pa.Field(nullable=True)
+    transferTargetAccount: Optional[Series[str]] = pa.Field(nullable=True)  # destination securities account of a TRANSFER_OUT (from PP's cross-entry link)
 
 
 class Account(BaseModel):  # pylint: disable=too-few-public-methods

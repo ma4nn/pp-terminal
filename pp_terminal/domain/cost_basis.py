@@ -19,6 +19,7 @@
 
 from datetime import datetime
 import logging
+from typing import Any
 
 import pandas as pd
 from pandera.typing import DataFrame
@@ -37,7 +38,45 @@ def _filter_purchase_transactions(transactions: DataFrame[TransactionSchema]) ->
     return TransactionSchema.validate(valid_purchases)
 
 
-def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionSchema]) -> DataFrame[TaxLotSchema]:
+def _transfer_target_account(transfer_out_row: pd.Series) -> str | None:
+    """Destination securities account of a depot transfer, from Portfolio Performance's cross-entry link."""
+    target = transfer_out_row.get('transferTargetAccount')
+    if target is None or pd.isna(target) or str(target).strip() == '':
+        return None
+    return str(target)
+
+
+def _consume_lots_fifo(
+        remaining_lots: list[dict[str, Any]],
+        account_id: str,
+        shares_to_match: float,
+        dest_account_id: str | None,
+) -> tuple[float, list[dict[str, Any]]]:
+    transferred_lots: list[dict[str, Any]] = []
+    for lot in remaining_lots:
+        if shares_to_match <= 0:
+            break
+        if lot['accountId'] != account_id:
+            continue
+        lot_shares = lot['shares']
+        shares_from_lot = min(shares_to_match, lot_shares)
+        new_shares = lot_shares - shares_from_lot
+        shares_to_match -= shares_from_lot
+
+        if dest_account_id and lot_shares > 0:
+            ratio = shares_from_lot / lot_shares
+            # costBasis is left un-prorated here (still the source lot's full amount); every consumer
+            # recomputes it from purchasePrice * shares + fees before reading it (see _calculate_cost_basis)
+            transferred_lots.append({**lot, 'accountId': dest_account_id, 'shares': shares_from_lot, 'fees': lot['fees'] * ratio})
+
+        if lot_shares > 0:
+            lot['fees'] = lot['fees'] * (new_shares / lot_shares)
+        lot['shares'] = new_shares
+
+    return shares_to_match, transferred_lots
+
+
+def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionSchema]) -> DataFrame[TaxLotSchema]:  # pylint: disable=too-many-locals
     """
     Match all sell transactions to purchase lots using FIFO and return remaining lots.
 
@@ -52,6 +91,12 @@ def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionS
         for schema validation and interface consistency, internally we use list of dicts
         for ~10x faster mutation during the matching algorithm. DataFrame .loc[] access
         has significant overhead that doesn't add value for sequential state updates.
+
+        Depot transfers (TRANSFER_OUT → TRANSFER_IN pairs, as recorded by Portfolio
+        Performance's "Wertpapierübertrag" feature) are handled by moving FIFO lots from the
+        source account to the destination account while preserving the original acquisition
+        cost. The destination account is taken from the authoritative cross-entry link that
+        Portfolio Performance stores for each transfer (TransactionSchema.transferTargetAccount).
     """
     lots = _filter_purchase_transactions(transactions)
     lots['purchasePrice'] = lots['amount'].abs() / lots['shares']  # save actual market price per share
@@ -62,40 +107,36 @@ def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionS
         return TaxLotSchema.validate(lots)
 
     sell_transactions = transactions.pipe(filter_by_type, transaction_types=[TransactionType.SELL, TransactionType.DELIVERY_OUTBOUND])
-    if sell_transactions.empty:
+    transfer_out_transactions = transactions.pipe(filter_by_type, transaction_types=[TransactionType.TRANSFER_OUT])
+
+    outgoing_frames = [f for f in [sell_transactions, transfer_out_transactions] if not f.empty]
+    if not outgoing_frames:
         return TaxLotSchema.validate(lots)
+    all_outgoing = pd.concat(outgoing_frames).sort_index(level='date')
 
-    # Convert to list of dicts for fast mutation during FIFO matching
     remaining_lots = lots.reset_index().to_dict('records')
-    sales_sorted = sell_transactions.sort_index(level='date')
 
-    for (_date, account_id, _security_id), row in sales_sorted.iterrows():
-        shares_to_match = float(row['shares'])
+    for (txn_date, account_id, security_id), row in all_outgoing.iterrows():
+        is_transfer_out = row['type'] == TransactionType.TRANSFER_OUT.name
+        shares_to_sell = float(row['shares'])
 
-        # Match against lots in FIFO order (only from same account)
-        for lot in remaining_lots:
-            if shares_to_match <= 0:
-                break
+        dest_account_id = _transfer_target_account(row) if is_transfer_out else None
+        if is_transfer_out and dest_account_id is None:
+            # no authoritative cross-entry link (corrupt or stale-cache data): keep the lots in the
+            # source account so security-level cost basis stays correct — only account attribution is stale
+            log.warning('TRANSFER_OUT of %.4f shares of %s on %s has no linked destination account — keeping lots in the source account', shares_to_sell, security_id, txn_date)
+            continue
 
-            if lot['accountId'] != account_id:
-                continue
+        unmatched, transferred_lots = _consume_lots_fifo(remaining_lots, account_id, shares_to_sell, dest_account_id)
+        if transferred_lots:
+            remaining_lots.extend(transferred_lots)
+            # transferred lots keep their original purchase date, so restore acquisition-date
+            # order for FIFO matching of subsequent sells in the destination account
+            remaining_lots.sort(key=lambda lot: lot['date'])
 
-            # Consume shares from this lot
-            lot_shares = lot['shares']
-            shares_from_lot = min(shares_to_match, lot_shares)
-            new_shares = lot_shares - shares_from_lot
-            shares_to_match -= shares_from_lot
+        if unmatched > 0.0001:  # Allow small floating point errors
+            log.warning('Sale/transfer of %.8f shares for security %s could not be fully matched to purchase lots', unmatched, security_id)
 
-            # Proportionally reduce fees based on remaining shares
-            if lot_shares > 0:
-                lot['fees'] = lot['fees'] * (new_shares / lot_shares)
-
-            lot['shares'] = new_shares
-
-        if shares_to_match > 0.0001:  # Allow small floating point errors
-            log.warning('Sale of %.8f shares for security %s could not be fully matched to purchase lots', shares_to_match, _security_id)
-
-    # Filter out exhausted lots and convert back to DataFrame
     remaining_lots = [lot for lot in remaining_lots if lot['shares'] > 0.0001]
     if not remaining_lots:
         return TaxLotSchema.empty()

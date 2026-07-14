@@ -159,6 +159,17 @@ type = "negative-share-balance"
 valid-months = []
 ```
 
+The `unlinked-depot-transfer` security rule also runs by default (severity `warning`) and flags securities whose depot transfer
+(`TRANSFER_OUT`) has no linked destination account in Portfolio Performance's cross-entry data — a sign of corrupt or stale-cache
+data. The transferred shares' cost basis then stays attributed to the source account. Configure it the same way to escalate or
+disable it:
+
+```toml
+[[commands.validate.securities.rules]]
+type = "unlinked-depot-transfer"
+severity = "error"
+```
+
 #### Temporal Validation
 
 All validation rules optionally support temporal constraints through the `valid-months` configuration option. This allows rules to run only during specific months of the year:

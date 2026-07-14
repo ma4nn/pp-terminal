@@ -224,10 +224,10 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["price-staleness", "price-limit", "price-limit-from-attribute", "cost-basis-limit", "cost-basis-limit-from-attribute", "paid-tax-validation", "negative-share-balance"]
+          "enum": ["price-staleness", "price-limit", "price-limit-from-attribute", "cost-basis-limit", "cost-basis-limit-from-attribute", "paid-tax-validation", "negative-share-balance", "unlinked-depot-transfer"]
         },
         "value": {
-          "description": "For price-staleness: an integer (days). For price-limit/cost-basis-limit: a number. For *-from-attribute rules: Portfolio Performance attribute UUID. For paid-tax-validation and negative-share-balance: not used (can be omitted).",
+          "description": "For price-staleness: an integer (days). For price-limit/cost-basis-limit: a number. For *-from-attribute rules: Portfolio Performance attribute UUID. For paid-tax-validation, negative-share-balance and unlinked-depot-transfer: not used (can be omitted).",
           "oneOf": [
             {
               "type": "number",

@@ -27,7 +27,7 @@ import pandas as pd
 import typer
 from pandera.typing import DataFrame
 
-from pp_terminal.data.filters import filter_by_account_and_security, filter_by_security, filter_by_account
+from pp_terminal.data.filters import filter_by_security, filter_by_account
 from pp_terminal.domain.cost_basis import enrich_fifo_lots, finalize_sell_lots
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.sell_strategy import SellStrategy, FixedSharesStrategy, MinTaxStrategy
@@ -71,24 +71,30 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
 
     if security_id:
         holdings = holdings.pipe(filter_by_security, security_id=security_id)
-    if account_id:
-        holdings = holdings.pipe(filter_by_account, account_id=account_id)
 
     if holdings.empty:
         return pd.DataFrame()
 
-    security_ids = holdings.index.get_level_values('securityId').unique()
-    latest_prices = snapshot.latest_prices
+    all_transactions = snapshot.securities_account_transactions  # kept across all accounts so cost_basis can relocate transferred lots
 
+    security_ids = list(holdings.index.get_level_values('securityId').unique())
+    if account_id:
+        # a security's cost-basis lots can reside in an account that shows no net share balance there
+        # (e.g. the source account of an unlinked transfer), so scope by the securities transacted in
+        # the account rather than by its share balance to keep those lots sellable
+        account_security_ids = set(all_transactions.pipe(filter_by_account, account_id=account_id).index.get_level_values('securityId'))
+        security_ids = [sid for sid in security_ids if sid in account_security_ids]
+        if not security_ids:
+            return pd.DataFrame()
+
+    latest_prices = snapshot.latest_prices
     missing_prices = [sid for sid in security_ids if sid not in latest_prices.index]
     if missing_prices:
         raise InputError(f"No price data for: {', '.join(missing_prices)}")
 
     all_enriched = []
-    for (acc_id, sec_id, _currency), _shares_held in holdings.items():
-        transactions = snapshot.securities_account_transactions.pipe(
-            filter_by_account_and_security, security_id=sec_id, account_id=acc_id
-        )
+    for sec_id in security_ids:
+        transactions = all_transactions.pipe(filter_by_security, security_id=sec_id)
         sale_price = price if price else latest_prices.loc[sec_id]
         enriched = enrich_fifo_lots(
             transactions, snapshot.date, sale_price, tax_rate,
@@ -101,6 +107,12 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
         return pd.DataFrame()
 
     result = pd.concat(all_enriched)
+
+    # enrichment spans all accounts to resolve transfers; keep only lots residing in the requested account
+    if account_id:
+        result = result.pipe(filter_by_account, account_id=account_id)
+        if result.empty:
+            return pd.DataFrame()
 
     strategy = _build_strategy(security_id, shares, target_net)
     if strategy:

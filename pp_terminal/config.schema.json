@@ -75,6 +75,11 @@
         "exemption-rate-attribute": {
           "description": "UUID of the security attribute containing per-security exemption rates",
           "$ref": "#/$defs/uuid"
+        },
+        "allowance": {
+          "description": "Sparerpauschbetrag (annual tax-free allowance) in EUR (2000 for joint assessment).",
+          "type": "number",
+          "minimum": 0
         }
       },
       "additionalProperties": false

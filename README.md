@@ -85,8 +85,9 @@ The tax configuration for the simulations can be customized in the [configuratio
 rate = 26.375  # percentage
 # Optionally define the already paid taxes per share (e.g. for the share-sell command)
 files = ["taxes_paid.csv"]  # Format: isin;year;deemed_income_per_share
-exempt-rate = 30  # percentage
-exempt-rate-attribute = "b3c38686-2d22-4b5d-8e38-e61dcf6fdde3"  # for per-security exemption rates 
+exemption-rate = 30  # percentage
+exemption-rate-attribute = "b3c38686-2d22-4b5d-8e38-e61dcf6fdde3"  # for per-security exemption rates
+allowance = 1000  # Sparerpauschbetrag (annual tax-free allowance) in EUR (2000 for joint assessment)
 ```
 
 ### Validate Data

@@ -140,36 +140,6 @@ severity = "warning"
 tolerance = 0.01
 ```
 
-#### Built-in Validations
-
-The `negative-share-balance` security rule runs by default (severity `warning`, tolerance `0.001` shares) and flags securities
-whose share balance is negative in any securities account — an indicator of missing or inconsistent transactions, since short
-positions are not supported by Portfolio Performance. Configuring the rule yourself replaces the built-in default:
-
-```toml
-# Escalate to an error and adjust the tolerance (absolute share count)
-[[commands.validate.securities.rules]]
-type = "negative-share-balance"
-severity = "error"
-tolerance = 0.001
-
-# Or disable it entirely
-[[commands.validate.securities.rules]]
-type = "negative-share-balance"
-valid-months = []
-```
-
-The `unlinked-depot-transfer` security rule also runs by default (severity `warning`) and flags securities whose depot transfer
-(`TRANSFER_OUT`) has no linked destination account in Portfolio Performance's cross-entry data — a sign of corrupt or stale-cache
-data. The transferred shares' cost basis then stays attributed to the source account. Configure it the same way to escalate or
-disable it:
-
-```toml
-[[commands.validate.securities.rules]]
-type = "unlinked-depot-transfer"
-severity = "error"
-```
-
 #### Temporal Validation
 
 All validation rules optionally support temporal constraints through the `valid-months` configuration option. This allows rules to run only during specific months of the year:

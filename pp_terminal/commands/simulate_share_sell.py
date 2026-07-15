@@ -77,15 +77,13 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
 
     all_transactions = snapshot.securities_account_transactions  # kept across all accounts so cost_basis can relocate transferred lots
 
-    security_ids = list(holdings.index.get_level_values('securityId').unique())
     if account_id:
-        # a security's cost-basis lots can reside in an account that shows no net share balance there
-        # (e.g. the source account of an unlinked transfer), so scope by the securities transacted in
-        # the account rather than by its share balance to keep those lots sellable
-        account_security_ids = set(all_transactions.pipe(filter_by_account, account_id=account_id).index.get_level_values('securityId'))
-        security_ids = [sid for sid in security_ids if sid in account_security_ids]
-        if not security_ids:
-            return pd.DataFrame()
+        # offer only securities with a positive net share balance in the requested account
+        # (snapshot.shares already drops zero/negative balances); the cross-account FIFO below still
+        # relocates linked-transfer lots, so a security transferred into the account stays sellable
+        holdings = holdings.pipe(filter_by_account, account_id=account_id)
+
+    security_ids = list(holdings.index.get_level_values('securityId').unique())
 
     latest_prices = snapshot.latest_prices
     missing_prices = [sid for sid in security_ids if sid not in latest_prices.index]

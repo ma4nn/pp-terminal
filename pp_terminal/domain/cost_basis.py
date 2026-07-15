@@ -49,6 +49,7 @@ def _transfer_target_account(transfer_out_row: pd.Series) -> str | None:
 def _consume_lots_fifo(
         remaining_lots: list[dict[str, Any]],
         account_id: str,
+        security_id: str,
         shares_to_match: float,
         dest_account_id: str | None,
 ) -> tuple[float, list[dict[str, Any]]]:
@@ -56,7 +57,7 @@ def _consume_lots_fifo(
     for lot in remaining_lots:
         if shares_to_match <= 0:
             break
-        if lot['accountId'] != account_id:
+        if lot['accountId'] != account_id or lot['securityId'] != security_id:
             continue
         lot_shares = lot['shares']
         shares_from_lot = min(shares_to_match, lot_shares)
@@ -127,7 +128,7 @@ def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionS
             log.warning('TRANSFER_OUT of %.4f shares of %s on %s has no linked destination account — keeping lots in the source account', shares_to_sell, security_id, txn_date)
             continue
 
-        unmatched, transferred_lots = _consume_lots_fifo(remaining_lots, account_id, shares_to_sell, dest_account_id)
+        unmatched, transferred_lots = _consume_lots_fifo(remaining_lots, account_id, security_id, shares_to_sell, dest_account_id)
         if transferred_lots:
             remaining_lots.extend(transferred_lots)
             # transferred lots keep their original purchase date, so restore acquisition-date

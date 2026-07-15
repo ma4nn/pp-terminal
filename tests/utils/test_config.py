@@ -193,8 +193,8 @@ def test_should_merge_fragments_deterministically_regardless_of_registration_ord
 
 
 def test_should_accept_reconfiguring_the_unlinked_depot_transfer_builtin_rule(tmp_path: Path) -> None:
-    """Finding #2: the built-in 'unlinked-depot-transfer' security rule must be a valid config type
-    so users can reconfigure or disable it like the sibling built-in 'negative-share-balance'."""
+    """The built-in 'unlinked-depot-transfer' security rule must be a valid config type so users can
+    reconfigure or disable it like the sibling built-in 'negative-share-balance'."""
     config = '[[commands.validate.securities.rules]]\ntype = "unlinked-depot-transfer"\nseverity = "error"\n'
 
     result = validated_toml_loader(_write_config(tmp_path, config))

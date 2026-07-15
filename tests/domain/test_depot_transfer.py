@@ -38,26 +38,31 @@ SELL_DATE = datetime(2024, 12, 31)
 _TRANSACTION_COLUMNS = ['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees', 'transferTargetAccount']
 
 
-def build_portfolio(transaction_rows: list[list[object]]) -> Portfolio:
-    """Two-depot portfolio around a single security for depot transfer scenarios."""
+def build_portfolio(
+    transaction_rows: list[list[object]],
+    securities: pd.DataFrame | None = None,
+    prices: pd.DataFrame | None = None,
+) -> Portfolio:
+    """Two-depot portfolio for depot transfer scenarios (defaults to a single priced security 'sec1')."""
     accounts = pd.DataFrame([
         ['Depot 1', AccountType.SECURITIES.value, None, False, 'EUR'],
         ['Depot 2', AccountType.SECURITIES.value, None, False, 'EUR'],
     ], columns=['name', 'type', 'referenceAccount', 'isRetired', 'currency'], index=['depot1', 'depot2'])
     accounts.index.name = 'accountId'
 
-    securities = pd.DataFrame([
-        ['Test ETF', 'IE00B4L5Y983', 'EUR'],
-    ], columns=['name', 'wkn', 'currency'], index=['sec1'])
-    securities.index.name = 'securityId'
+    if securities is None:
+        securities = pd.DataFrame([
+            ['Test ETF', 'IE00B4L5Y983', 'EUR'],
+        ], columns=['name', 'wkn', 'currency'], index=['sec1'])
+        securities.index.name = 'securityId'
+
+    if prices is None:
+        prices = pd.DataFrame([
+            [SELL_DATE, 'sec1', 160.0],
+        ], columns=['date', 'securityId', 'price']).set_index(['date', 'securityId'])
 
     transactions = pd.DataFrame(transaction_rows, columns=_TRANSACTION_COLUMNS)
     transactions = transactions.set_index(['date', 'accountId', 'securityId'])
-
-    prices = pd.DataFrame([
-        [SELL_DATE, 'sec1', 160.0],
-    ], columns=['date', 'securityId', 'price'])
-    prices = prices.set_index(['date', 'securityId'])
 
     portfolio = Portfolio(accounts, transactions, securities, prices)
     portfolio.base_currency = 'EUR'
@@ -158,6 +163,30 @@ def test_sell_in_source_account_after_transfer() -> None:
     assert lots.loc['depot1', 'shares'] == pytest.approx(5.0)
 
 
+def test_fifo_matching_is_scoped_per_security_within_an_account() -> None:
+    """A sell (or transfer) must consume only lots of its own security: another security's older lot in
+    the same account must never be matched against it."""
+    securities = pd.DataFrame(
+        [['ETF One', 'IE00B4L5Y983', 'EUR'], ['ETF Two', 'IE00B4L5YC18', 'EUR']],
+        columns=['name', 'wkn', 'currency'], index=['sec1', 'sec2'])
+    securities.index.name = 'securityId'
+    prices = pd.DataFrame(
+        [[SELL_DATE, 'sec1', 160.0], [SELL_DATE, 'sec2', 600.0]],
+        columns=['date', 'securityId', 'price']).set_index(['date', 'securityId'])
+
+    portfolio = build_portfolio([
+        [datetime(2020, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
+        [datetime(2022, 1, 15), 'depot1', 'sec2', TransactionType.BUY.value, -5000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
+        [datetime(2024, 1, 10), 'depot1', 'sec2', TransactionType.SELL.value, 6000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
+    ], securities=securities, prices=prices)
+
+    lots = remaining_lots(portfolio)
+    # the sec2 sell consumes sec2's own lot; sec1's older 100-lot stays untouched
+    assert set(lots['securityId']) == {'sec1'}
+    assert lots['shares'].sum() == pytest.approx(10.0)
+    assert lots.iloc[0]['purchasePrice'] == pytest.approx(100.0)
+
+
 def test_same_day_transfers_between_distinct_pairs_do_not_collide() -> None:
     """Two same-day, equal-size transfers of the same security route to their own destinations (no key collision)."""
     portfolio = build_portfolio([
@@ -224,8 +253,8 @@ def test_share_sell_account_filter_includes_transferred_lots() -> None:
     assert result['purchasePrice'].iloc[0] == pytest.approx(100.0)
 
 
-# Regression tests for /code-review findings #1 and #3 (fixed here) and #4 (a post-refactor
-# behaviour change pinned as a characterization test so any future change to it is deliberate).
+# Regression tests for depot-transfer cost-basis edge cases, including a characterization test that
+# pins a deliberate post-refactor behaviour change so any future change to it stays intentional.
 
 
 def _deemed_income_data(year: int, security_id: str, per_share: float) -> pd.DataFrame:
@@ -237,9 +266,9 @@ def _deemed_income_data(year: int, security_id: str, per_share: float) -> pd.Dat
 
 
 def test_transfer_merging_same_date_lot_does_not_double_count_deemed_income() -> None:
-    """Finding #1: a transfer into an account already holding a same-date lot of the same security
-    yields two lots sharing one (date, accountId, securityId) key; deemed income must be attributed
-    per lot, not summed across the shared key and broadcast back onto both."""
+    """A transfer into an account already holding a same-date lot of the same security yields two lots
+    sharing one (date, accountId, securityId) key; deemed income must be attributed per lot, not summed
+    across the shared key and broadcast back onto both."""
     portfolio = build_portfolio([
         [datetime(2020, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
         [datetime(2020, 1, 15), 'depot2', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
@@ -254,27 +283,10 @@ def test_transfer_merging_same_date_lot_does_not_double_count_deemed_income() ->
     assert lots['deemedIncome'].sum() == pytest.approx(20.0)
 
 
-def test_share_sell_offers_unlinked_transfer_lots_from_source_account() -> None:
-    """Finding #3: an unlinked TRANSFER_OUT keeps the cost basis in the source account, so the shares
-    must stay sellable from there even though that account shows no net share balance after the
-    transfer. They are not offered from the destination, since no cost basis was relocated to it."""
-    portfolio = build_portfolio([
-        [datetime(2020, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
-        [datetime(2023, 1, 15), 'depot1', 'sec1', TransactionType.TRANSFER_OUT.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
-        [datetime(2023, 1, 15), 'depot2', 'sec1', TransactionType.TRANSFER_IN.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
-    ])
-
-    from_source = prepare_share_sell_df(portfolio, {}, SELL_DATE, TAX_RATE, account_id='depot1')
-    assert from_source['shares'].sum() == pytest.approx(10.0)
-    assert from_source['purchasePrice'].iloc[0] == pytest.approx(100.0)
-
-    assert prepare_share_sell_df(portfolio, {}, SELL_DATE, TAX_RATE, account_id='depot2').empty
-
-
 def test_fixed_shares_selects_globally_oldest_lot_across_accounts() -> None:
-    """Characterization (finding #4): after the refactor, --shares without --account-id selects lots in
-    global acquisition-date order across accounts, not grouped by account as before. Pins the behaviour so
-    a future change is deliberate rather than silent."""
+    """Characterization test: --shares without --account-id selects lots in global acquisition-date order
+    across accounts, not grouped by account as before. Pins the behaviour so a future change is deliberate
+    rather than silent."""
     portfolio = build_portfolio([
         [datetime(2022, 6, 1), 'depot1', 'sec1', TransactionType.BUY.value, -1400.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
         [datetime(2020, 1, 15), 'depot2', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
@@ -284,3 +296,28 @@ def test_fixed_shares_selects_globally_oldest_lot_across_accounts() -> None:
 
     assert result.iloc[0]['date'] == datetime(2020, 1, 15)          # depot2's older lot, not depot1's
     assert result.iloc[0]['purchasePrice'] == pytest.approx(100.0)
+
+
+def test_share_sell_account_filter_ignores_missing_price_of_security_transferred_out() -> None:
+    """A security fully transferred out of the requested account has no sellable lots there, so its absent
+    price must not abort the simulation of another security still held in that account."""
+    securities = pd.DataFrame(
+        [['Transferred ETF', 'IE00B4L5Y983', 'EUR'], ['Held ETF', 'IE00B4L5YC18', 'EUR']],
+        columns=['name', 'wkn', 'currency'], index=['sec1', 'sec2'])
+    securities.index.name = 'securityId'
+
+    prices = pd.DataFrame([[SELL_DATE, 'sec2', 200.0]],  # sec1 deliberately has no price
+                          columns=['date', 'securityId', 'price']).set_index(['date', 'securityId'])
+
+    portfolio = build_portfolio([
+        [datetime(2020, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
+        [datetime(2023, 1, 15), 'depot1', 'sec1', TransactionType.TRANSFER_OUT.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, 'depot2'],
+        [datetime(2023, 1, 15), 'depot2', 'sec1', TransactionType.TRANSFER_IN.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
+        [datetime(2021, 3, 1), 'depot1', 'sec2', TransactionType.BUY.value, -1500.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
+    ], securities=securities, prices=prices)
+
+    result = prepare_share_sell_df(portfolio, {}, SELL_DATE, TAX_RATE, account_id='depot1')
+
+    # only sec2 (held & priced in depot1) is offered; sec1's missing price no longer raises InputError
+    assert set(result['securityName']) == {'Held ETF'}
+    assert result['shares'].sum() == pytest.approx(10.0)

@@ -32,10 +32,11 @@ from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df
 from pp_terminal.commands.view_accounts import prepare_accounts_df
 from pp_terminal.commands.view_securities import prepare_securities_df
 from pp_terminal.commands.view_taxonomies import prepare_taxonomies_df
+from pp_terminal.commands.view_transactions import prepare_transactions_df
 from pp_terminal.data.filters import clean_for_display
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.portfolio import Portfolio
-from pp_terminal.domain.schemas import AccountType
+from pp_terminal.domain.schemas import AccountType, TransactionType
 from pp_terminal.data.pp_portfolio_builder import CachedPpPortfolioBuilder
 from pp_terminal.exceptions import InputError
 from pp_terminal.utils.cache import checksum
@@ -190,6 +191,48 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         parsed_type = AccountType[account_type] if account_type else None
         df = prepare_accounts_df(portfolio, config, by_date, parsed_type)
         return _clean_records(df.reset_index())
+
+    @mcp.tool()
+    def query_transactions(
+        security: str | None = None,
+        account_id: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        transaction_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List securities account transactions with optional filters.
+
+        Each row is one transaction showing: date, securityName, securityId, accountId,
+        type, amount, shares, currency, fees, taxes.
+
+        Args:
+            security: ISIN or securityId UUID (defaults to all securities)
+            account_id: Filter by account ID
+            from_date: Start date as ISO string, inclusive (e.g. '2023-01-01')
+            to_date: End date as ISO string, inclusive (e.g. '2023-12-31')
+            transaction_type: Transaction type filter (e.g. 'BUY', 'SELL', 'DIVIDENDS', 'TRANSFER_IN')
+        """
+        portfolio = _ensure_fresh_portfolio()
+
+        security_id = _resolve_security(portfolio, security) if security else None
+
+        parsed_types = None
+        if transaction_type:
+            try:
+                parsed_types = [TransactionType[transaction_type.upper()]]
+            except KeyError as e:
+                valid = [tt.name for tt in TransactionType]
+                raise InputError(f"Unknown transaction type '{transaction_type}'. Valid types: {', '.join(valid)}") from e
+
+        df = prepare_transactions_df(
+            portfolio,
+            security_id=security_id,
+            account_id=account_id,
+            from_date=datetime.fromisoformat(from_date) if from_date else None,
+            to_date=datetime.fromisoformat(to_date) if to_date else None,
+            transaction_types=parsed_types,
+        )
+        return _clean_records(df)
 
     @mcp.tool()
     def simulate_vap(

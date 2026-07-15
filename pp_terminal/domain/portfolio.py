@@ -139,6 +139,16 @@ def get_securities_account_by_id(portfolio: Portfolio, account_id: str) -> Accou
     return Account(**account_data)
 
 
+def resolve_security_id(portfolio: Portfolio, security: str) -> str:
+    """Resolve an ISIN or securityId UUID to an internal securityId. Raises InputError if not found."""
+    isin_matches = portfolio.securities.index[portfolio.securities['isin'] == security]
+    if len(isin_matches) == 1:
+        return str(isin_matches[0])
+    if security in portfolio.securities.index:
+        return security
+    raise InputError(f"Security '{security}' not found by ID or ISIN")
+
+
 def get_security_by_id(portfolio: Portfolio, security_id: str) -> Security:
     if security_id not in portfolio.securities.index:
         raise InputError(f"Security '{security_id}' not found in portfolio")

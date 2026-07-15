@@ -37,6 +37,12 @@ type Config = Dict[str, Any]
 _loaded_config: Config = {}
 
 
+def _default_config_path() -> Path:
+    xdg = os.environ.get('XDG_CONFIG_HOME')
+    base = Path(xdg) if xdg else Path.home() / '.config'
+    return base / 'pp-terminal' / 'config.toml'
+
+
 def get_tax_rate(config: Config) -> float:
     return float(config.get('tax', {}).get('rate', 26.375))
 
@@ -136,7 +142,9 @@ def validated_toml_loader(config_path: str) -> Config:
     global _loaded_config  # pylint: disable=global-statement
 
     if config_path == '':
-        config_path = os.environ.get('PP_TERMINAL_CONFIG', '')
+        default_path = _default_config_path()
+        if default_path.is_file():
+            config_path = str(default_path)
 
     if config_path == '':
         return _loaded_config

@@ -56,27 +56,44 @@ def _write_config(tmp_path: Path, content: str) -> str:
     return str(config_file)
 
 
-def test_should_load_config_from_env_var_when_no_cli_config(monkeypatch: pytest.MonkeyPatch, request: TopRequest) -> None:
-    monkeypatch.setenv('PP_TERMINAL_CONFIG', str(request.path.parent.parent / 'fixtures' / 'minimal.toml'))
+def test_should_load_config_from_default_xdg_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: TopRequest) -> None:
+    config_dir = tmp_path / 'pp-terminal'
+    config_dir.mkdir()
+    (config_dir / 'config.toml').write_text((request.path.parent.parent / 'fixtures' / 'minimal.toml').read_text(encoding='utf-8'), encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
 
     result = validated_toml_loader('')
 
     assert result.get('precision') == 4
     assert result.get('tax', {}).get('rate') == pytest.approx(27.375)
 
-def test_should_ignore_env_var_when_cli_config_provided(monkeypatch: pytest.MonkeyPatch, request: TopRequest) -> None:
-    monkeypatch.setenv('PP_TERMINAL_CONFIG', str(request.path.parent.parent / 'fixtures' / 'kommer.toml'))
+def test_should_ignore_xdg_config_when_cli_config_provided(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: TopRequest) -> None:
+    config_dir = tmp_path / 'pp-terminal'
+    config_dir.mkdir()
+    (config_dir / 'config.toml').write_text((request.path.parent.parent / 'fixtures' / 'kommer.toml').read_text(encoding='utf-8'), encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
 
     result = validated_toml_loader(str(request.path.parent.parent / 'fixtures' / 'minimal.toml'))
 
     assert 'commands' not in result
 
-def test_should_return_empty_config_when_no_cli_config_and_no_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv('PP_TERMINAL_CONFIG', raising=False)
+def test_should_return_empty_config_when_no_cli_config_and_no_xdg_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
 
     result = validated_toml_loader('')
 
     assert result == {}
+
+def test_should_honor_home_fallback_when_xdg_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: TopRequest) -> None:
+    monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)
+    config_dir = tmp_path / '.config' / 'pp-terminal'
+    config_dir.mkdir(parents=True)
+    (config_dir / 'config.toml').write_text((request.path.parent.parent / 'fixtures' / 'minimal.toml').read_text(encoding='utf-8'), encoding='utf-8')
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+
+    result = validated_toml_loader('')
+
+    assert result.get('precision') == 4
 
 def test_should_validate_plugin_config_when_fragment_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _install_fragments(monkeypatch, {'simulate.safe-withdrawal': 'tests.utils.test_config:PLUGIN_SCHEMA'})

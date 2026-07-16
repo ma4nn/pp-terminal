@@ -43,6 +43,8 @@ EXEMPT_RATE_CONFIG = {
 @pytest.fixture(autouse=True)
 def _reset_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config_module, '_loaded_config', {})
+    # prevent a developer's ambient config from leaking into tests that don't pass --config
+    monkeypatch.delenv('PP_TERMINAL_CONFIG', raising=False)
 
 
 @pytest.fixture(autouse=True)

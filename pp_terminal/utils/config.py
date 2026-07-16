@@ -45,6 +45,10 @@ def get_exempt_rate(config: Config) -> float:
     return float(config.get('tax', {}).get('exemption-rate', 30.0))
 
 
+def get_allowance(config: Config) -> float:
+    return float(config.get('tax', {}).get('allowance', 1000.0))
+
+
 def get_exempt_rate_attribute(config: Config) -> str | None:
     value = config.get('tax', {}).get('exemption-rate-attribute')
     return str(value) if value is not None else None

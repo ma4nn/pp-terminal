@@ -198,6 +198,10 @@ _RULE_TYPES = {
 }
 
 
+def known_rule_types() -> set[str]:
+    return set(_RULE_TYPES)
+
+
 def create_rule(rule_config: dict[str, Any]) -> ValidationRule:
     rule_type = rule_config['type']
     if rule_type not in _RULE_TYPES:

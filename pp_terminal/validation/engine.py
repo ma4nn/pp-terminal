@@ -64,6 +64,22 @@ class ValidationResult:
         return cls(entity_id=entity_id, violations=[])
 
 
+def configured_rule_types(config: dict[str, Any]) -> set[str]:
+    user_types = {
+        rule_config['type']
+        for config_key in ('validate.accounts.rules', 'validate.securities.rules')
+        for rule_config in get_command_config(config, config_key, [])
+    }
+    return user_types | {rule.rule_type for rule in create_built_in_securities_rules()}
+
+
+def _filter_rules(rules: list[ValidationRule], rule_types: set[str] | None) -> list[ValidationRule]:
+    if rule_types is None:
+        return rules
+
+    return [rule for rule in rules if rule.rule_type in rule_types]
+
+
 def _validate_entity(
     entity_id: str,
     entity: pd.Series,
@@ -84,10 +100,12 @@ def _validate_entity(
 def validate_accounts(
     portfolio: Portfolio,
     snapshot: PortfolioSnapshot,
-    config: dict[str, Any]
+    config: dict[str, Any],
+    rule_types: set[str] | None = None
 ) -> dict[str, ValidationResult]:
     """Validates all deposit accounts. Returns dict mapping account_id -> ValidationResult."""
     rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.accounts.rules', [])]
+    rules = _filter_rules(rules, rule_types)
 
     total_balances = snapshot.balances.groupby('accountId').sum()
     total_balances.name = 'TotalBalance'
@@ -120,11 +138,13 @@ def validate_accounts(
 def validate_securities(
     portfolio: Portfolio,
     snapshot: PortfolioSnapshot,
-    config: dict[str, Any]
+    config: dict[str, Any],
+    rule_types: set[str] | None = None
 ) -> dict[str, ValidationResult]:
     user_rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.securities.rules', [])]
     configured_types = {rule.rule_type for rule in user_rules}
     rules = [rule for rule in create_built_in_securities_rules() if rule.rule_type not in configured_types] + user_rules
+    rules = _filter_rules(rules, rule_types)
 
     latest_prices = portfolio.prices.groupby(['securityId']).tail(1)
 

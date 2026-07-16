@@ -92,11 +92,14 @@ allowance = 1000  # Sparerpauschbetrag (annual tax-free allowance) in EUR (2000 
 
 ### Validate Data
 
-| Command               | Description                                                 |
-|-----------------------|-------------------------------------------------------------|
-| `validate`            | Run all validation checks on the portfolio data             |
-| `validate accounts`   | Run configured accounts validations, e.g. balance limits    |
-| `validate securities` | Run configured security validations, e.g. prices up-to-date |
+| Command    | Description                                      |
+|------------|--------------------------------------------------|
+| `validate` | Run all validation checks on the portfolio data  |
+
+Use the repeatable `--rule` option to run only specific rule types:
+```bash
+pp-terminal --file depot.xml validate --rule price-staleness --rule balance-limit
+```
 
 This is a sample of validation rules that can be configured in the [configuration file](#configuration-file):
 ```toml

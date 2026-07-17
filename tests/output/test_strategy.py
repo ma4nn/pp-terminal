@@ -44,4 +44,4 @@ def test_csv_omits_icon_markup_and_severity() -> None:
 def test_json_carries_structured_severity() -> None:
     assert JsonOutputStrategy().render_messages(['too high', 'no price'], is_error=True) == {'severity': 'error', 'text': 'too high; no price'}
     assert JsonOutputStrategy().render_messages(['stale'], is_error=False) == {'severity': 'warning', 'text': 'stale'}
-    assert JsonOutputStrategy().render_messages([], is_error=True) == ''
+    assert JsonOutputStrategy().render_messages([], is_error=True) is None

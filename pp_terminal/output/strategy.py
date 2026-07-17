@@ -103,7 +103,7 @@ class CsvOutputStrategy(OutputStrategy):
 class JsonOutputStrategy(OutputStrategy):
     def render_messages(self, messages: list[str], is_error: bool) -> Any:
         if not messages:
-            return ''
+            return None
         return {'severity': 'error' if is_error else 'warning', 'text': '; '.join(messages)}
 
     def result_table(self, df: pd.DataFrame | None, options: TableOptions) -> Any:

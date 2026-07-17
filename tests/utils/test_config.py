@@ -95,6 +95,25 @@ def test_should_honor_home_fallback_when_xdg_unset(monkeypatch: pytest.MonkeyPat
 
     assert result.get('precision') == 4
 
+def test_should_ignore_invalid_config_at_default_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    _install_fragments(monkeypatch, {})  # no plugins -> a [commands.simulate...] section is schema-invalid
+    config_dir = tmp_path / 'pp-terminal'
+    config_dir.mkdir()
+    (config_dir / 'config.toml').write_text('[commands.simulate.safe-withdrawal]\nyears = 40\n', encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+
+    with caplog.at_level(logging.WARNING):
+        result = validated_toml_loader('')
+
+    assert result == {}
+    assert 'Ignoring invalid config' in caplog.text
+
+def test_should_still_reject_invalid_config_when_explicitly_passed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _install_fragments(monkeypatch, {})
+
+    with pytest.raises(JsonSchemaValidationError, match=r"'simulate' was unexpected"):
+        validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n'))
+
 def test_should_validate_plugin_config_when_fragment_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _install_fragments(monkeypatch, {'simulate.safe-withdrawal': 'tests.utils.test_config:PLUGIN_SCHEMA'})
 

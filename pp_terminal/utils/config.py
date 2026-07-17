@@ -141,6 +141,7 @@ def validated_toml_loader(config_path: str) -> Config:
     """
     global _loaded_config  # pylint: disable=global-statement
 
+    explicit_config = config_path != ''
     if config_path == '':
         default_path = _default_config_path()
         if default_path.is_file():
@@ -159,10 +160,14 @@ def validated_toml_loader(config_path: str) -> Config:
         for error in errors:
             path = '.'.join(str(p) for p in error.path) if error.path else 'root'
             error_messages.append(f"  {path}: {error.message}")
+        message = f"Config validation failed for {config_path}:\n" + '\n'.join(error_messages)
 
-        raise JsonSchemaValidationError(
-            f"Config validation failed for {config_path}:\n" + '\n'.join(error_messages)
-        )
+        if explicit_config:
+            raise JsonSchemaValidationError(message)
+
+        # a config the user did not explicitly request must never break every command
+        log.warning("Ignoring invalid config at default location:\n%s", message)
+        return _loaded_config
 
     log.debug("Loaded and validated config from file \"%s\"", config_path)
 

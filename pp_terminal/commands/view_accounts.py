@@ -27,7 +27,7 @@ import typer
 
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.output.column_utils import normalize_columns
-from pp_terminal.data.filters import clean_for_display, unstack_column_by_currency, pivot_taxonomy_columns
+from pp_terminal.data.filters import clean_for_display, unstack_column_by_currency, pivot_taxonomy_columns, retired_row_labels
 from pp_terminal.exceptions import InputError
 from pp_terminal.utils.helper import footer
 from pp_terminal.output.strategy import OutputStrategy, Console
@@ -168,7 +168,14 @@ def print_accounts(  # pylint: disable=too-many-locals
         unstack_balance='balance' in selected_columns_preunstack and 'balance' in df.columns
     )
 
+    retired_ids = retired_row_labels(pd.concat([portfolio.deposit_accounts, portfolio.securities_accounts]))
+
     console.print(*output.result_table(
-        df, TableOptions(title="Balances on Accounts", caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}", show_index=True)
+        df, TableOptions(
+            title="Balances on Accounts",
+            caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
+            show_index=True,
+            dimmed_rows=retired_ids
+        )
     ))
     console.print(output.text(footer()), style="dim")

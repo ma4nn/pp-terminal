@@ -17,8 +17,22 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
-from pp_terminal.data.filters import filter_by_account_and_security
+import pandas as pd
+
+from pp_terminal.data.filters import filter_by_account_and_security, retired_row_labels
 from pp_terminal.domain.portfolio import Portfolio
+
+
+def test_retired_row_labels_returns_retired_indices() -> None:
+    df = pd.DataFrame({'isRetired': [False, True, None, True]}, index=['a', 'b', 'c', 'd'])
+
+    assert retired_row_labels(df) == {'b', 'd'}
+
+
+def test_retired_row_labels_empty_without_column() -> None:
+    df = pd.DataFrame({'name': ['x', 'y']}, index=['a', 'b'])
+
+    assert retired_row_labels(df) == set()
 
 
 def test_nonexistent_security(portfolio_with_purchases: Portfolio) -> None:

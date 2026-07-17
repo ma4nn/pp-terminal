@@ -23,7 +23,7 @@ from typing import cast, Callable, Any
 
 import typer
 import pandas as pd
-from pp_terminal.data.filters import clean_for_display, filter_by_security, pivot_taxonomy_columns
+from pp_terminal.data.filters import clean_for_display, filter_by_security, pivot_taxonomy_columns, retired_row_labels
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.vap import calculate_vap_by_security
 from pp_terminal.output.column_utils import normalize_columns
@@ -115,6 +115,7 @@ def print_securities(  # pylint: disable=too-many-locals
         fields = ','.join(config_fields) if config_fields else 'SecurityId,Name,Wkn,Currency,Shares,Messages'
 
     df = prepare_securities_df(portfolio, config, output, by, active, in_stock)
+    retired_ids = retired_row_labels(df)
 
     uuid_to_name = {uuid: attr.name for uuid, attr in portfolio.security_attributes.items()}
     requested_columns = [uuid_to_name.get(col.strip(), col.strip()) for col in fields.split(',')]
@@ -138,7 +139,8 @@ def print_securities(  # pylint: disable=too-many-locals
             title=f"{'Active ' if active else ''}Securities",
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
             show_index=False,
-            value_formatter=formatter_with_types(portfolio.security_attributes)
+            value_formatter=formatter_with_types(portfolio.security_attributes),
+            dimmed_rows=retired_ids
         )
     ))
     console.print(output.text(footer()), style="dim")

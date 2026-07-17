@@ -338,12 +338,14 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return _clean_records(result) if not result.empty else []
 
     @mcp.tool()
-    def simulate_sell_target_net(
+    def simulate_sell_target_net(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         target_net: float,
         security: str | None = None,
         account_id: str | None = None,
         date: str | None = None,
         tax_rate: float | None = None,
+        preserve_allocation: bool = False,
+        taxonomy: str | None = None,
     ) -> list[dict[str, Any]]:
         """Find the shares to sell to achieve a target net proceeds amount with minimal taxes.
 
@@ -351,6 +353,10 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         'which securities to sell to get 5000 EUR with minimal taxes?', or
         'how to realize X EUR net from my portfolio?'.
         Selects lots across securities/accounts to minimize total tax while reaching the target.
+        Set preserve_allocation=True to instead keep the current asset allocation intact
+        (answers 'get X EUR net without changing my allocation'). Combine with taxonomy to preserve
+        allocation at the asset-class level, consolidating within each class (so redundant holdings of
+        the same class need not all be sold); without taxonomy every holding is reduced proportionally.
         Uses latest known prices. Each row is one FIFO lot showing: securityName, purchase date,
         shares to sell, currency, purchasePrice, costBasis, fees, salePrice, grossProceeds,
         capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax, netProceeds.
@@ -361,6 +367,8 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
             account_id: Restrict to a single securities account (defaults to all accounts)
             date: Sale date as ISO string, e.g. '2025-06-15' (defaults to today)
             tax_rate: Personal tax rate in percent (defaults to config or 26.375%)
+            preserve_allocation: Keep the current asset allocation intact while reaching the target
+            taxonomy: Preserve allocation at the category level of this Portfolio Performance taxonomy (requires preserve_allocation)
         """
         portfolio = _ensure_fresh_portfolio()
         sell_date, effective_tax_rate = _sell_defaults(date, tax_rate)
@@ -369,7 +377,9 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
 
         result = prepare_share_sell_df(
             portfolio, config, sell_date, effective_tax_rate,
-            security_id, account_id, target_net=target_net, tax_csv_data=tax_csv_data
+            security_id, account_id, target_net=target_net,
+            preserve_allocation=preserve_allocation, taxonomy=taxonomy,
+            tax_csv_data=tax_csv_data
         )
         return _clean_records(result) if not result.empty else []
 

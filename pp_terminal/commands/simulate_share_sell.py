@@ -30,7 +30,8 @@ from pandera.typing import DataFrame
 from pp_terminal.data.filters import filter_by_account_and_security, filter_by_security, filter_by_account
 from pp_terminal.domain.cost_basis import enrich_fifo_lots, finalize_sell_lots
 from pp_terminal.data.tax import load_prepaid_tax_data
-from pp_terminal.domain.sell_strategy import SellStrategy, FixedSharesStrategy, MinTaxStrategy
+from pp_terminal.domain.sell_strategy import SellStrategy, FixedSharesStrategy, MinTaxStrategy, AllocationPreservingStrategy
+from pp_terminal.domain.allocation import build_category_map
 from pp_terminal.exceptions import InputError
 from pp_terminal.utils.config import Config, get_exempt_rate, get_tax_files
 from pp_terminal.utils.helper import footer
@@ -64,8 +65,13 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
         shares: float | None = None,
         price: Money | None = None,
         target_net: Money | None = None,
+        preserve_allocation: bool = False,
+        taxonomy: str | None = None,
         tax_csv_data: DataFrame[TaxPaidSchema] | None = None,
 ) -> pd.DataFrame:
+    if taxonomy is not None and not preserve_allocation:
+        raise InputError("taxonomy requires preserve_allocation")
+
     snapshot = PortfolioSnapshot(portfolio, date)
     holdings = snapshot.shares
 
@@ -102,7 +108,8 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
 
     result = pd.concat(all_enriched)
 
-    strategy = _build_strategy(security_id, shares, target_net)
+    category_by_security = _resolve_categories(portfolio, taxonomy, holdings) if taxonomy else None
+    strategy = _build_strategy(shares, target_net, preserve_allocation, category_by_security)
     if strategy:
         result = finalize_sell_lots(strategy.select_lots(result), tax_rate)
 
@@ -115,8 +122,34 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
     return result[_RESULT_COLUMNS]
 
 
+def _resolve_categories(portfolio: Portfolio, taxonomy: str, holdings: pd.Series) -> dict[str, str]:
+    category_by_security, multi_category = build_category_map(portfolio.taxonomy_assignments, taxonomy)
+    held_ids = list(dict.fromkeys(holdings.index.get_level_values('securityId')))
+    held = set(held_ids)
+
+    held_multi = [sid for sid in multi_category if sid in held]
+    if held_multi:
+        log.warning(
+            "Securities span multiple categories in '%s'; using the dominant one (allocation may drift): %s",
+            taxonomy, _security_names(portfolio, held_multi)
+        )
+
+    unmapped = [sid for sid in held_ids if sid not in category_by_security]
+    if unmapped:
+        log.warning(
+            "Securities are not classified in '%s' and are preserved individually rather than within their asset class: %s",
+            taxonomy, _security_names(portfolio, unmapped)
+        )
+
+    return category_by_security
+
+
+def _security_names(portfolio: Portfolio, security_ids: list[str]) -> str:
+    return ', '.join(sorted(get_security_by_id(portfolio, sid).name for sid in security_ids))
+
+
 @app.command(name="share-sell")
-def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         ctx: typer.Context,
         security_id: Annotated[str | None, typer.Argument(help="Security ID (defaults to all securities)")] = None,
         account_id: Annotated[str | None, typer.Option("--account-id", "-a", help="Securities account ID (defaults to all accounts)")] = None,
@@ -125,6 +158,8 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
         shares: Annotated[float | None, typer.Option(help="Number of shares to sell (only with --security-id)", min=0.0001)] = None,
         price: Annotated[Money | None, typer.Option(help="Sale price per share (only with --security-id)", min=0.0001)] = None,
         target_net: Annotated[Money | None, typer.Option("--target-net", help="Target net proceeds to realize (minimizes taxes)", min=0.01)] = None,
+        preserve_allocation: Annotated[bool, typer.Option("--preserve-allocation", help="Sell across holdings to preserve the current asset allocation (requires --target-net)")] = False,
+        taxonomy: Annotated[str | None, typer.Option("--taxonomy", help="Preserve allocation at the category level of this Portfolio Performance taxonomy, consolidating within each category (requires --preserve-allocation)")] = None,
         tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data", callback=tax_csv_callback)] = None
 ) -> None:
     """
@@ -135,7 +170,7 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
 
-    _validate_options(security_id, shares, price, target_net)
+    _validate_options(security_id, shares, price, target_net, preserve_allocation, taxonomy)
 
     if date is None:
         date = get_today()
@@ -145,7 +180,8 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
 
     result = prepare_share_sell_df(
         portfolio, config, date, tax_rate,
-        security_id, account_id, shares, price, target_net, tax_csv_data
+        security_id, account_id, shares, price, target_net, preserve_allocation,
+        taxonomy, tax_csv_data
     )
 
     if result.empty:
@@ -161,11 +197,13 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
     console.print(output.text(footer()), style="dim")
 
 
-def _validate_options(
+def _validate_options(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         security_id: str | None,
         shares: float | None,
         price: Money | None,
-        target_net: Money | None
+        target_net: Money | None,
+        preserve_allocation: bool,
+        taxonomy: str | None
 ) -> None:
     if shares is not None and target_net is not None:
         raise InputError("--shares and --target-net are mutually exclusive")
@@ -173,17 +211,22 @@ def _validate_options(
         raise InputError("--shares requires --security-id")
     if price is not None and security_id is None:
         raise InputError("--price requires --security-id")
+    if preserve_allocation and target_net is None:
+        raise InputError("--preserve-allocation requires --target-net")
+    if taxonomy is not None and not preserve_allocation:
+        raise InputError("--taxonomy requires --preserve-allocation")
 
 
 def _build_strategy(
-        security_id: str | None,
         shares: float | None,
-        target_net: Money | None
+        target_net: Money | None,
+        preserve_allocation: bool,
+        category_by_security: dict[str, str] | None
 ) -> SellStrategy | None:
     if shares is not None:
         return FixedSharesStrategy(shares)
     if target_net is not None:
+        if preserve_allocation:
+            return AllocationPreservingStrategy(target_net, category_by_security)
         return MinTaxStrategy(target_net)
-    if security_id is None:
-        return None
     return None

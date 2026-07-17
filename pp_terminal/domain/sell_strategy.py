@@ -136,3 +136,92 @@ class MinTaxStrategy(SellStrategy):  # pylint: disable=too-few-public-methods
                     tie += 1
 
         return selected
+
+
+class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-public-methods
+    """Reach the target net while preserving the current allocation.
+
+    Every allocation group loses the same fraction of its value, so weights stay
+    intact. A group is a taxonomy category when ``category_by_security`` maps the
+    security, otherwise the security itself (security-level preservation). Within a
+    group the required value is drawn from the most tax-efficient securities first
+    (FIFO within each), consolidating redundant holdings of the same asset class
+    instead of selling every one pro-rata.
+    """
+
+    def __init__(self, target_net: Money, category_by_security: dict[str, str] | None = None):
+        self.target_net = target_net
+        self.category_by_security = category_by_security or {}
+
+    def select_lots(self, lots: DataFrame[TaxLotSellSchema]) -> DataFrame[TaxLotSellSchema]:
+        if lots.empty:
+            raise InputError(f"No lots available. Target net: {self.target_net:.2f}")
+
+        df = lots.reset_index().sort_values(['accountId', 'securityId', 'date'])
+        df['_group'] = df['securityId'].map(lambda sid: self.category_by_security.get(sid, sid))
+
+        max_net = (df['shares'] * df['netProceedsPerShare']).sum()
+        if self.target_net > max_net + 0.005:
+            raise InputError(
+                f"Target net {self.target_net:.2f} exceeds maximum achievable {max_net:.2f}"
+            )
+
+        fraction = self._solve_fraction(df)
+        selected = self._select_at_fraction(df, fraction)
+        return TaxLotSellSchema.validate(
+            selected.drop(columns='_group').set_index(['date', 'accountId', 'securityId'])
+        )
+
+    def _solve_fraction(self, df: pd.DataFrame) -> float:
+        low, high = 0.0, 1.0
+        for _ in range(60):
+            mid = (low + high) / 2
+            selected = self._select_at_fraction(df, mid)
+            net = (selected['shares'] * selected['netProceedsPerShare']).sum()
+            if net < self.target_net:
+                low = mid
+            else:
+                high = mid
+        return high
+
+    def _select_at_fraction(self, df: pd.DataFrame, fraction: float) -> pd.DataFrame:
+        parts = []
+        for _group, group in df.groupby('_group', sort=False):
+            target_gross = fraction * group['grossProceeds'].sum()
+            selected = self._consume_group_to_gross(group, target_gross)
+            if not selected.empty:
+                parts.append(selected)
+        return pd.concat(parts) if parts else df.iloc[0:0].copy()
+
+    @staticmethod
+    def _consume_group_to_gross(group: pd.DataFrame, target_gross: float) -> pd.DataFrame:  # pylint: disable=too-many-locals
+        queues = _build_fifo_queues(group)
+        heap: list[tuple[float, int, int]] = []
+        for tie, queue in enumerate(queues.values()):
+            head = group.loc[queue[0]]
+            heapq.heappush(heap, (_tax_priority(head), tie, queue[0]))
+
+        taken: dict[int, float] = {}
+        remaining = target_gross
+        tie = len(queues)
+        while remaining > 0.005 and heap:
+            _priority, _tie, row_idx = heapq.heappop(heap)
+            row = group.loc[row_idx]
+
+            if row['grossProceeds'] <= remaining + 0.005:
+                taken[row_idx] = row['shares']
+                remaining -= row['grossProceeds']
+            else:
+                taken[row_idx] = remaining / row['salePrice']
+                remaining = 0.0
+
+            queue = queues[(row['accountId'], row['securityId'])]
+            pos = queue.index(row_idx)
+            if pos + 1 < len(queue):
+                next_row = group.loc[queue[pos + 1]]
+                heapq.heappush(heap, (_tax_priority(next_row), tie, queue[pos + 1]))
+                tie += 1
+
+        result = group.loc[list(taken.keys())].copy()
+        result['shares'] = list(taken.values())
+        return result

@@ -37,21 +37,14 @@ class ValidationResult:
     violations: list[tuple[ValidationRule, str]]  # (rule, message)
 
     @property
+    def violation_messages(self) -> list[str]:
+        """Returns the plain violation messages (no presentation)."""
+        return [msg for _, msg in self.violations]
+
+    @property
     def messages(self) -> str:
-        """Returns icon-prefixed, semicolon-separated violation messages."""
-        if not self.violations:
-            return ''
-
-        icon = self._get_icon()
-        msgs = '; '.join(msg for _, msg in self.violations)
-        return f'{icon} {msgs}' if icon else msgs
-
-    def _get_icon(self) -> str:
-        """Returns appropriate icon based on severity."""
-        if not self.violations:
-            return ''
-        has_error = any(rule.is_error() for rule, _ in self.violations)
-        return '❌' if has_error else '⚠️'
+        """Returns semicolon-separated violation messages (plain, no icons)."""
+        return '; '.join(self.violation_messages)
 
     @property
     def has_errors(self) -> bool:

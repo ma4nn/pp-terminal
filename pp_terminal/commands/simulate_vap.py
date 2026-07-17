@@ -33,7 +33,7 @@ from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import Percent, Money
 from pp_terminal.domain.vap import calculate_vap, get_base_rate_for_year, add_account_balances
-from pp_terminal.output.table_decorator import TableOptions, format_value
+from pp_terminal.output.table_decorator import TableOptions, format_value, colorize
 
 app = typer.Typer()
 console = Console()
@@ -94,7 +94,7 @@ def print_tax_table(  # pylint: disable=too-many-locals
     def format_value_with_balance_check(value: Any, index: str, row: pd.Series) -> str:
         if 'name' in row.index and row['name'] == 'Related Account Balance' and isinstance(value, Money) and index in vap_totals:
             color = 'red' if value < vap_totals[index] else 'green'
-            return f"[{color}]{format_value(value, index, row)}[/{color}]"
+            return colorize(format_value(value, index, row), color)
         return format_value(value, index, row)
 
     console.print(*output.result_table(

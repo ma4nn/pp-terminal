@@ -233,7 +233,6 @@ def test_warning_severity(portfolio_with_purchases_and_sales: Portfolio) -> None
     # sec-a should have a violation but not an error (warning severity)
     assert len(results['sec-a'].violations) > 0
     assert not results['sec-a'].has_errors
-    assert '⚠️' in results['sec-a'].messages
 
 
 def test_mixed_severities(portfolio_with_purchases_and_sales: Portfolio) -> None:

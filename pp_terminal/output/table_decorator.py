@@ -58,6 +58,10 @@ def camel_case_to_title(column_name: str) -> str:
     return text
 
 
+def colorize(text: str, color: str) -> str:
+    return f'[{color}]{text}[/{color}]'
+
+
 def format_value(value: Any, column_name: str, row: pd.Series, attribute_types: dict[str, str] | None = None) -> str:
     if column_name.lower() == 'shares' and isinstance(value, float):
         return format_shares(value)

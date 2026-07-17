@@ -38,6 +38,7 @@ from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import AccountType
 from pp_terminal.data.pp_portfolio_builder import CachedPpPortfolioBuilder
 from pp_terminal.exceptions import InputError
+from pp_terminal.output.strategy import JsonOutputStrategy
 from pp_terminal.utils.cache import checksum
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.vap import calculate_vap, get_base_rate_for_year, add_account_balances
@@ -109,6 +110,7 @@ def _resolve_security(portfolio: Portfolio, security: str) -> str:
 
 def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: disable=too-many-locals,too-many-statements
     builder = CachedPpPortfolioBuilder(config=config)
+    output = JsonOutputStrategy()  # plain (icon-free) validation messages for MCP records
     state: dict[str, Any] = {
         'portfolio': builder.construct(file_path),
         'checksum': checksum(file_path),
@@ -168,7 +170,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """
         portfolio = _ensure_fresh_portfolio()
         by_date = datetime.fromisoformat(date) if date else datetime.now()
-        df = prepare_securities_df(portfolio, config, by_date, active_only, in_stock_only)
+        df = prepare_securities_df(portfolio, config, output, by_date, active_only, in_stock_only)
         return _clean_records(df)
 
     @mcp.tool()
@@ -188,7 +190,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         portfolio = _ensure_fresh_portfolio()
         by_date = datetime.fromisoformat(date) if date else datetime.now()
         parsed_type = AccountType[account_type] if account_type else None
-        df = prepare_accounts_df(portfolio, config, by_date, parsed_type)
+        df = prepare_accounts_df(portfolio, config, output, by_date, parsed_type)
         return _clean_records(df.reset_index())
 
     @mcp.tool()

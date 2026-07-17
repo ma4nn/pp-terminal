@@ -105,7 +105,6 @@ def test_negative_balance_warning_without_config(validation_results: dict[str, V
 
 def test_negative_balance_is_warning_not_error(validation_results: dict[str, ValidationResult]) -> None:
     assert not validation_results['sec-oversold'].has_errors
-    assert '⚠️' in validation_results['sec-oversold'].messages
 
 
 def test_negative_balance_in_one_account_despite_positive_net(validation_results: dict[str, ValidationResult]) -> None:

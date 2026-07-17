@@ -92,6 +92,7 @@ class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             case_statements.append(f'MAX(CASE WHEN at.id = ? THEN at.converterClass END) AS "{get_converter_column_name(attr_uuid)}"')
             params.append(attr_uuid)
 
+        # B608 false positive: case_statements contain only column names; values are bound via ? placeholders
         sql = f"""
             select s.*,
                 {', '.join(case_statements) if case_statements else '""'}
@@ -99,7 +100,7 @@ class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             left join security_attr as sa on sa."security" = s.uuid
             left join attribute_type as at on sa.attr_uuid = at.id
             group by s.uuid
-        """  # nosec B608 - case_statements contain only column names with ? placeholders, data passed via params
+        """  # nosec
 
         securities = pd.read_sql_query(sql, self._db.connection, index_col='uuid', params=params).rename_axis('securityId')
         securities = convert_attribute_types(securities, security_attrs)
@@ -143,6 +144,7 @@ left join xact_unit as xu on xu.xact = x.uuid and xu.type = 'GROSS_VALUE'
             case_statements.append(f'MAX(CASE WHEN at.id = ? THEN at.converterClass END) AS "{get_converter_column_name(attr_uuid)}"')
             params.append(attr_uuid)
 
+        # B608 false positive: case_statements contain only column names; values are bound via ? placeholders
         sql = f"""
             select a.*,
                 {', '.join(case_statements) if case_statements else '""'}
@@ -150,7 +152,7 @@ left join xact_unit as xu on xu.xact = x.uuid and xu.type = 'GROSS_VALUE'
             left join account_attr as aa on aa."account" = a.uuid
             left join attribute_type as at on aa.attr_uuid = at.id
             group by a.uuid
-        """  # nosec B608 - case_statements contain only column names with ? placeholders, data passed via params
+        """  # nosec
 
         accounts = (pd.read_sql_query(sql, self._db.connection, index_col='uuid', params=params)
                           .rename_axis('accountId'))

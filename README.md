@@ -3,16 +3,25 @@
 ![build status](https://github.com/ma4nn/pp-terminal/actions/workflows/ci.yml/badge.svg) [![Join My Discord](https://dev-investor.de/wp-content/uploads/join-discord.svg)](https://dev-investor.de/chat)
 
 A powerful command-line interface (CLI) that allows programmatic access to [Portfolio Performance](https://www.portfolio-performance.info/) data 
-to offer a whole new level of insights into your assets.  
+to offer a whole new level of insights into your assets.
 
-_pp-terminal_ can act as an [MCP server](#mcp-server) to give AI models like Claude Opus, Gemini or Qwen access to your 
-(anonymized) portfolio to help you answer questions like
+_pp-terminal_ is a lightweight tool for all the nice-to-have features that won't make it into the official Portfolio Performance app.
+This can be because of country-specific tax rules, complex Java implementation, highly individual requirements, 
+too many edge-cases, etc.
+
+## Use Cases
+
+You can run the single commands individually or _pp-terminal_ can act as an [MCP server](#mcp-server) to give AI models like Claude Opus, Gemini or Qwen access to your 
+(anonymized) portfolio to help you answer questions like:
 - "Give me an overview of my portfolio"
 - "What do you think about my portfolio allocation? Am I overweight anywhere?"
 - "Do I have enough cash to cover the upcoming Vorabpauschale taxes?"
 - "I need 1k EUR after tax. Which securities should I sell to minimize taxes?"
 
-For example, _pp-terminal_ includes a CLI command to calculate the preliminary tax values ("Vorabpauschale") for Germany:
+Thís application **supports specific tax concepts** like FIFO, [Sparer-Pauschbetrag](https://de.wikipedia.org/wiki/Sparer-Pauschbetrag),
+[Grundfreibetrag](https://de.wikipedia.org/wiki/Grundfreibetrag_(Deutschland)), [Günstigerprüfung](https://de.wikipedia.org/wiki/G%C3%BCnstigerpr%C3%BCfung)
+and [Teilfreistellungen](https://de.wikipedia.org/wiki/Investmentsteuergesetz_(Deutschland)).  
+For example, _pp-terminal_ includes a CLI command to calculate the [Vorabpauschale](https://de.wikipedia.org/wiki/Vorabpauschale) (preliminary taxes) for Germany:
 
 ![Vorabpauschale command in pp-terminal](docs/sample_vorabpauschale.png)
 
@@ -22,10 +31,6 @@ For example, _pp-terminal_ includes a CLI command to calculate the preliminary t
 
 > [!TIP]
 > Using MoneyMoney for managing your finances? Check out how to [export Sankey Charts](https://github.com/ma4nn/moneymoney-sankey).
-
-_pp-terminal_ is a lightweight tool for all the nice-to-have features that won't make it into the official Portfolio Performance app.
-This can be because of country-dependant tax rules, complex Java implementation, highly individual requirements, 
-too many edge-cases, etc.
 
 1. [Available Commands](#available-commands)
 2. [Requirements](#requirements)
@@ -82,12 +87,12 @@ fields = ["AccountId", "Name", "Balance"]  # call with --fields=xx to see a list
 The tax configuration for the simulations can be customized in the [configuration file](#configuration-file):
 ```toml
 [tax]
-rate = 26.375  # percentage
-# Optionally define the already paid taxes per share (e.g. for the share-sell command)
+rate = 26.375  # tax rate percentage
+# optionally define the already paid taxes per share (e.g. for the share-sell command)
 files = ["taxes_paid.csv"]  # Format: isin;year;deemed_income_per_share
 exemption-rate = 30  # percentage
 exemption-rate-attribute = "b3c38686-2d22-4b5d-8e38-e61dcf6fdde3"  # for per-security exemption rates
-allowance = 1000  # Sparerpauschbetrag (annual tax-free allowance) in EUR (2000 for joint assessment)
+allowance = 1000  # Sparerpauschbetrag in EUR
 ```
 
 ### Validate Data

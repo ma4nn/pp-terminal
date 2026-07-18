@@ -512,3 +512,66 @@ class TestAllocationPreservingStrategyMinAmount:
         # reaching (almost) the maximum needs the Cash class, but a 1000 minimum excludes it
         with pytest.raises(InputError, match="requires selling amounts below"):
             AllocationPreservingStrategy(max_net - 10.0, self.CATEGORY_MAP, min_amount=1000.0).select_lots(enriched)
+
+
+class TestAllocationPreservingStrategyPerOrderFloor:
+    # Equity = sec-1 (big, low tax) + sec-2 (tiny, 300 gross); Bonds = sec-3 (big).
+    CATEGORY_MAP = {'sec-1': 'Equity', 'sec-2': 'Equity', 'sec-3': 'Bonds'}
+
+    def _enriched(self) -> DataFrame[TaxLotSellSchema]:
+        portfolio = _make_portfolio(
+            transactions_data=[
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 9000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 150.0, 3.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-3', TransactionType.BUY.value, 9800.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+            securities_data=[['ETF A', 'WKN1', 'EUR'], ['ETF B', 'WKN2', 'EUR'], ['Bond C', 'WKN3', 'EUR']],
+        )
+        return _enrich_multi(portfolio, sell_price=100.0)  # sec-2 holds only 300 gross
+
+    @staticmethod
+    def _gross_per_order(result: DataFrame[TaxLotSellSchema]) -> pd.Series:
+        sold = finalize_sell_lots(result, TAX_RATE).reset_index()
+        return sold.groupby(['accountId', 'securityId'])['grossProceeds'].sum()
+
+    def test_no_order_falls_below_the_minimum(self) -> None:
+        enriched = self._enriched()
+
+        result = AllocationPreservingStrategy(4000.0, self.CATEGORY_MAP, min_amount=1000.0).select_lots(enriched)
+
+        assert (self._gross_per_order(result) >= 1000.0 - 0.01).all()  # every placed order clears the floor
+
+    def test_tiny_holding_left_unsold_but_class_weight_preserved(self) -> None:
+        enriched = self._enriched()
+
+        strategy = AllocationPreservingStrategy(4000.0, self.CATEGORY_MAP, min_amount=1000.0)
+        result = finalize_sell_lots(strategy.select_lots(enriched), TAX_RATE)
+
+        sold = result.reset_index()
+        assert 'sec-2' not in set(sold['securityId'])  # tiny holding (300 < 1000) never forms an order
+        sold['cls'] = sold['securityId'].map(self.CATEGORY_MAP)
+        gross_by_class = sold.groupby('cls')['grossProceeds'].sum()
+        # Equity is worth 10300 (10000 + 300), Bonds 10000; each still sheds the same fraction
+        assert gross_by_class['Equity'] / 10300 == pytest.approx(gross_by_class['Bonds'] / 10000, abs=1e-3)
+
+    def test_donor_shift_keeps_both_orders_above_floor(self) -> None:
+        """When a class needs two securities and the marginal would be a sliver, the split still clears the floor."""
+        portfolio = _make_portfolio(
+            transactions_data=[
+                # Equity spread over two mid-sized securities so the class quota must use both
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 1900.0, 20.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 580.0, 6.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+            securities_data=[['ETF A', 'WKN1', 'EUR'], ['ETF B', 'WKN2', 'EUR']],
+        )
+        enriched = _enrich_multi(portfolio, sell_price=100.0)  # caps: sec-1 2000, sec-2 600
+
+        # single Equity class, target forces the quota above sec-1's 2000 cap -> sec-2 is the marginal,
+        # whose naive slice (~28) is below 500; the donor shift must lift it rather than drop it
+        strategy = AllocationPreservingStrategy(2000.0, {'sec-1': 'Equity', 'sec-2': 'Equity'}, min_amount=500.0)
+        result = finalize_sell_lots(strategy.select_lots(enriched), TAX_RATE)
+
+        gross = result.reset_index().groupby('securityId')['grossProceeds'].sum()
+        assert set(gross.index) == {'sec-1', 'sec-2'}       # marginal kept as a valid order, not dropped
+        assert (gross >= 500.0 - 0.01).all()                # both orders clear the floor
+        assert result['netProceeds'].sum() == pytest.approx(2000.0, abs=1.0)  # target still met exactly

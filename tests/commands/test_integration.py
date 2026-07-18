@@ -174,7 +174,7 @@ def test_share_sell_preserve_allocation_min_amount(request: TopRequest, caplog: 
 
     rows = json.loads(result.output)
     assert sum(row['netProceeds'] for row in rows) == pytest.approx(1000.0, abs=1.0)  # target still met
-    assert 'left unsold to avoid dust trades' in caplog.text  # small classes skipped and reported
+    assert 'were left unsold' in caplog.text  # classes too small for a valid order skipped and reported
 
 
 def test_share_sell_preserve_allocation_requires_target_net(request: TopRequest) -> None:

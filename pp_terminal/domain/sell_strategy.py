@@ -19,6 +19,7 @@
 
 import heapq
 from abc import ABC, abstractmethod
+from typing import cast
 
 import pandas as pd
 from pandera.typing import DataFrame
@@ -75,6 +76,40 @@ def _seed_heap(df: pd.DataFrame, groups: dict[tuple[str, str], list[int]]) -> li
         if row['netProceedsPerShare'] > 0:
             heapq.heappush(heap, (_tax_priority(row), tie, queue[0]))
     return heap
+
+
+def _consume_group_lots(group: pd.DataFrame, target_gross: float) -> pd.DataFrame:  # pylint: disable=too-many-locals
+    """Fill a group's gross quota drawing the most tax-efficient lots first (lot-level, no order floor)."""
+    queues = _build_fifo_queues(group)
+    heap: list[tuple[float, int, int]] = []
+    for tie, queue in enumerate(queues.values()):
+        head = group.loc[queue[0]]
+        heapq.heappush(heap, (_tax_priority(head), tie, queue[0]))
+
+    taken: dict[int, float] = {}
+    remaining = target_gross
+    tie = len(queues)
+    while remaining > 0.005 and heap:
+        _priority, _tie, row_idx = heapq.heappop(heap)
+        row = group.loc[row_idx]
+
+        if row['grossProceeds'] <= remaining + 0.005:
+            taken[row_idx] = row['shares']
+            remaining -= row['grossProceeds']
+        else:
+            taken[row_idx] = remaining / row['salePrice']
+            remaining = 0.0
+
+        queue = queues[(row['accountId'], row['securityId'])]
+        pos = queue.index(row_idx)
+        if pos + 1 < len(queue):
+            next_row = group.loc[queue[pos + 1]]
+            heapq.heappush(heap, (_tax_priority(next_row), tie, queue[pos + 1]))
+            tie += 1
+
+    result = group.loc[list(taken.keys())].copy()
+    result['shares'] = list(taken.values())
+    return result
 
 
 class MinTaxStrategy(SellStrategy):  # pylint: disable=too-few-public-methods
@@ -148,10 +183,13 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
     (FIFO within each), consolidating redundant holdings of the same asset class
     instead of selling every one pro-rata.
 
-    When ``min_amount`` is set, any group whose proportional quota (gross proceeds)
-    would fall below it is left unsold to avoid dust trades; the remaining groups
-    still absorb the full target net, so those small classes drift slightly. The
-    names of those skipped groups are exposed via ``excluded_groups`` after
+    When ``min_amount`` is set it acts as a per-order (per account/security) floor:
+    within a group the quota is consolidated onto whole orders that each clear the
+    floor, and a holding too small to ever form a valid order is left unsold (its
+    class quota is covered by larger siblings, so weights hold). A group whose entire
+    quota is below the floor cannot support even one order and is dropped altogether;
+    the remaining groups still absorb the full target net, so those small classes
+    drift slightly, and their names are exposed via ``excluded_groups`` after
     ``select_lots`` so the caller can warn about them.
     """
 
@@ -225,35 +263,82 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
                 parts.append(selected)
         return pd.concat(parts) if parts else df.iloc[0:0].copy()
 
-    @staticmethod
-    def _consume_group_to_gross(group: pd.DataFrame, target_gross: float) -> pd.DataFrame:  # pylint: disable=too-many-locals
-        queues = _build_fifo_queues(group)
-        heap: list[tuple[float, int, int]] = []
-        for tie, queue in enumerate(queues.values()):
-            head = group.loc[queue[0]]
-            heapq.heappush(heap, (_tax_priority(head), tie, queue[0]))
+    def _consume_group_to_gross(self, group: pd.DataFrame, target_gross: float) -> pd.DataFrame:
+        if self.min_amount:
+            return self._consume_group_with_floor(group, target_gross, self.min_amount)
+        return _consume_group_lots(group, target_gross)
 
+    @staticmethod
+    def _consume_group_with_floor(group: pd.DataFrame, target_gross: float, floor: float) -> pd.DataFrame:
+        """Fill a group's quota consolidating onto whole orders that each clear the per-order floor."""
+        keys = AllocationPreservingStrategy._order_keys_by_tax(group)
+        allocations = AllocationPreservingStrategy._allocate_gross(keys, target_gross, floor)
+        lots_by_key = {key: fifo_idx for key, _capacity, _priority, fifo_idx in keys}
+        parts = [AllocationPreservingStrategy._consume_key_fifo(group, lots_by_key[key], gross)
+                 for key, gross in allocations.items()]
+        return pd.concat(parts) if parts else group.iloc[0:0].copy()
+
+    @staticmethod
+    def _order_keys_by_tax(group: pd.DataFrame) -> list[tuple[tuple[str, str], float, float, list[int]]]:
+        """One entry per order (accountId, securityId): its gross capacity, blended tax priority and FIFO lots."""
+        keys: list[tuple[tuple[str, str], float, float, list[int]]] = []
+        for key, sub in group.groupby(['accountId', 'securityId'], sort=False):
+            net = sub['netProceeds'].sum()
+            priority = sub['totalTax'].sum() / net if net > 0 else float('inf')
+            fifo_idx = list(sub.sort_values('date').index)
+            keys.append((cast(tuple[str, str], key), sub['grossProceeds'].sum(), priority, fifo_idx))
+        keys.sort(key=lambda item: (item[2], -item[1]))
+        return keys
+
+    @staticmethod
+    def _allocate_gross(
+            keys: list[tuple[tuple[str, str], float, float, list[int]]], target_gross: float, floor: float
+    ) -> dict[tuple[str, str], float]:
+        remaining = target_gross
+        allocations: dict[tuple[str, str], float] = {}
+        for key, capacity, _priority, _fifo_idx in keys:
+            if remaining <= 0.005:
+                break
+            if capacity < floor - 0.005:
+                continue  # even a full sale of this holding stays below the floor -> never a valid order
+            take = min(capacity, remaining)
+            allocations[key] = take
+            remaining -= take
+        AllocationPreservingStrategy._raise_marginal_to_floor(allocations, floor)
+        return allocations
+
+    @staticmethod
+    def _raise_marginal_to_floor(allocations: dict[tuple[str, str], float], floor: float) -> None:
+        """Lift the single sub-floor partial order to the floor by shifting the shortfall onto larger orders."""
+        for key in [key for key, gross in allocations.items() if gross < floor - 0.005]:
+            deficit = floor - allocations[key]
+            donors = sorted((other for other in allocations if other != key and allocations[other] - floor > 0.005),
+                            key=lambda other: allocations[other], reverse=True)
+            if sum(allocations[other] - floor for other in donors) >= deficit - 0.005:
+                allocations[key] = floor
+                for donor in donors:
+                    shifted = min(allocations[donor] - floor, deficit)
+                    allocations[donor] -= shifted
+                    deficit -= shifted
+                    if deficit <= 0.005:
+                        break
+            else:
+                del allocations[key]  # cannot form a valid order here; leave this sliver (< floor) unsold
+
+    @staticmethod
+    def _consume_key_fifo(group: pd.DataFrame, fifo_idx: list[int], target_gross: float) -> pd.DataFrame:
         taken: dict[int, float] = {}
         remaining = target_gross
-        tie = len(queues)
-        while remaining > 0.005 and heap:
-            _priority, _tie, row_idx = heapq.heappop(heap)
-            row = group.loc[row_idx]
-
+        for idx in fifo_idx:
+            if remaining <= 0.005:
+                break
+            row = group.loc[idx]
             if row['grossProceeds'] <= remaining + 0.005:
-                taken[row_idx] = row['shares']
+                taken[idx] = row['shares']
                 remaining -= row['grossProceeds']
             else:
-                taken[row_idx] = remaining / row['salePrice']
+                taken[idx] = remaining / row['salePrice']
                 remaining = 0.0
-
-            queue = queues[(row['accountId'], row['securityId'])]
-            pos = queue.index(row_idx)
-            if pos + 1 < len(queue):
-                next_row = group.loc[queue[pos + 1]]
-                heapq.heappush(heap, (_tax_priority(next_row), tie, queue[pos + 1]))
-                tie += 1
-
         result = group.loc[list(taken.keys())].copy()
         result['shares'] = list(taken.values())
         return result

@@ -141,7 +141,7 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
         result = finalize_sell_lots(strategy.select_lots(result), tax_rate)
         if isinstance(strategy, AllocationPreservingStrategy) and strategy.excluded_groups:
             log.warning(
-                "Asset classes below the %.2f minimum were left unsold to avoid dust trades: %s",
+                "Asset classes whose entire sale would fall below the %.2f minimum order were left unsold: %s",
                 min_amount, ', '.join(strategy.excluded_groups)
             )
 
@@ -196,7 +196,7 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
         price: Annotated[Money | None, typer.Option(help="Sale price per share (only with --security-id)", min=0.0001)] = None,
         target_net: Annotated[Money | None, typer.Option("--target-net", help="Target net proceeds to realize (minimizes taxes)", min=0.01)] = None,
         taxonomy: Annotated[str | None, typer.Option("--preserve-allocation", metavar="TAXONOMY", help="Preserve the current asset allocation while reaching --target-net, using this Portfolio Performance taxonomy's classes")] = None,
-        min_amount: Annotated[Money | None, typer.Option("--min-amount", help="Skip any asset class whose gross sale would fall below this, to avoid dust trades (only with --preserve-allocation)", min=0.01)] = None,
+        min_amount: Annotated[Money | None, typer.Option("--min-amount", help="Minimum gross size for any sell order; smaller holdings are consolidated within their class or left unsold (only with --preserve-allocation)", min=0.01)] = None,
         summary: Annotated[bool, typer.Option("--summary", help="Aggregate the FIFO lots into one row per security (an actionable sell plan)")] = False,
         tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data", callback=tax_csv_callback)] = None
 ) -> None:

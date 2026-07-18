@@ -18,6 +18,7 @@
 """
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,30 @@ def test_share_sell_preserve_allocation(request: TopRequest) -> None:
     assert rows, "expected at least one lot to be sold"
     assert sum(row['netProceeds'] for row in rows) == pytest.approx(1000.0, abs=1.0)
     assert all('isin' in row for row in rows)
+
+
+def test_share_sell_preserve_allocation_min_amount(request: TopRequest, caplog: pytest.LogCaptureFixture) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    with caplog.at_level(logging.WARNING, logger='pp_terminal.commands.simulate_share_sell'):
+        result = runner.invoke(app, [
+            '--file', str(fixtures_dir / 'kommer.ids.xml'),
+            '--config', str(fixtures_dir / 'kommer.toml'),
+            '--output', 'json',
+            '--no-cache',
+            'simulate', 'share-sell',
+            '--target-net', '1000',
+            '--preserve-allocation', 'Anlagekategorien',
+            '--min-amount', '500',
+            '--tax-rate', '26.375'
+        ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert sum(row['netProceeds'] for row in rows) == pytest.approx(1000.0, abs=1.0)  # target still met
+    assert 'left unsold to avoid dust trades' in caplog.text  # small classes skipped and reported
 
 
 def test_share_sell_preserve_allocation_requires_target_net(request: TopRequest) -> None:

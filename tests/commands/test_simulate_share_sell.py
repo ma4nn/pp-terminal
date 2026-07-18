@@ -70,6 +70,12 @@ def test_preserve_allocation_requires_target_net() -> None:
         prepare_share_sell_df(Portfolio(), {}, datetime(2025, 1, 1), 26.375, taxonomy="Anything")
 
 
+def test_min_amount_requires_preserve_allocation() -> None:
+    """A minimum trade size only makes sense together with allocation preservation."""
+    with pytest.raises(InputError, match="requires preserve-allocation"):
+        prepare_share_sell_df(Portfolio(), {}, datetime(2025, 1, 1), 26.375, target_net=1000.0, min_amount=50.0)
+
+
 def test_warns_about_held_but_unclassified_securities(warning_log: pytest.LogCaptureFixture) -> None:
     portfolio = _portfolio([
         ['AA', 'sec-1', 'security', 'Equity', 10000],

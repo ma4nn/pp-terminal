@@ -444,3 +444,71 @@ class TestAllocationPreservingStrategyByCategory:
         shares_by_security = result.reset_index().groupby('securityId')['shares'].sum()
         assert shares_by_security['sec-2'] == pytest.approx(100.0)  # cheaper equity fully consumed first
         assert 0.0 < shares_by_security['sec-1'] < 100.0            # then spills into the pricier one
+
+
+# --- AllocationPreservingStrategy (--min-amount) ---
+
+class TestAllocationPreservingStrategyMinAmount:
+    # Equity 20000 (sec-1+sec-2), Bonds 10000 (sec-3), Cash 500 (sec-4, tiny)
+    CATEGORY_MAP = {'sec-1': 'Equity', 'sec-2': 'Equity', 'sec-3': 'Bonds', 'sec-4': 'Cash'}
+
+    def _enriched(self) -> DataFrame[TaxLotSellSchema]:
+        portfolio = _make_portfolio(
+            transactions_data=[
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 5000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 9500.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-3', TransactionType.BUY.value, 9800.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-4', TransactionType.BUY.value, 490.0, 5.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+            securities_data=[['ETF A', 'WKN1', 'EUR'], ['ETF B', 'WKN2', 'EUR'], ['Bond C', 'WKN3', 'EUR'], ['Cash D', 'WKN4', 'EUR']],
+        )
+        return _enrich_multi(portfolio, sell_price=100.0)
+
+    def test_skips_small_class_and_still_hits_target(self) -> None:
+        enriched = self._enriched()
+
+        strategy = AllocationPreservingStrategy(5000.0, self.CATEGORY_MAP, min_amount=200.0)
+        result = finalize_sell_lots(strategy.select_lots(enriched), TAX_RATE)
+
+        sec_ids = set(result.reset_index()['securityId'].unique())
+        assert 'sec-4' not in sec_ids  # tiny Cash class (quota well below 200) is left unsold
+        assert strategy.excluded_groups == ['Cash']  # and it is reported to the caller
+        assert result['netProceeds'].sum() == pytest.approx(5000.0, abs=1.0)  # target still met by the rest
+
+    def test_cascade_excludes_multiple_classes(self) -> None:
+        # Equity 100000 (sec-1), Bonds 1000 (sec-2), Cash 900 (sec-3): a low target keeps both
+        # small classes' quotas under the minimum even after excluding one, so the loop excludes both.
+        portfolio = _make_portfolio(
+            transactions_data=[
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 50000.0, 1000.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 950.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-3', TransactionType.BUY.value, 882.0, 9.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+            securities_data=[['ETF A', 'WKN1', 'EUR'], ['Bond B', 'WKN2', 'EUR'], ['Cash C', 'WKN3', 'EUR']],
+        )
+        enriched = _enrich_multi(portfolio, sell_price=100.0)
+
+        strategy = AllocationPreservingStrategy(2000.0, {'sec-1': 'Equity', 'sec-2': 'Bonds', 'sec-3': 'Cash'}, min_amount=500.0)
+        result = finalize_sell_lots(strategy.select_lots(enriched), TAX_RATE)
+
+        assert strategy.excluded_groups == ['Cash', 'Bonds']  # smallest first, across two loop iterations
+        assert set(result.reset_index()['securityId'].unique()) == {'sec-1'}
+        assert result['netProceeds'].sum() == pytest.approx(2000.0, abs=1.0)
+
+    def test_no_exclusion_when_all_classes_clear_the_minimum(self) -> None:
+        enriched = self._enriched()
+
+        strategy = AllocationPreservingStrategy(5000.0, self.CATEGORY_MAP, min_amount=10.0)
+        result = strategy.select_lots(enriched)
+
+        sec_ids = set(result.reset_index()['securityId'].unique())
+        assert 'sec-4' in sec_ids  # Cash quota clears a 10.0 minimum, so it is still sold
+        assert strategy.excluded_groups == []
+
+    def test_infeasible_target_raises(self) -> None:
+        enriched = self._enriched()
+        max_net = (enriched['shares'] * enriched['netProceedsPerShare']).sum()
+
+        # reaching (almost) the maximum needs the Cash class, but a 1000 minimum excludes it
+        with pytest.raises(InputError, match="requires selling amounts below"):
+            AllocationPreservingStrategy(max_net - 10.0, self.CATEGORY_MAP, min_amount=1000.0).select_lots(enriched)

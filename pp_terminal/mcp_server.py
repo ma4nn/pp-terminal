@@ -345,6 +345,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         date: str | None = None,
         tax_rate: float | None = None,
         taxonomy: str | None = None,
+        min_amount: float | None = None,
     ) -> list[dict[str, Any]]:
         """Find the shares to sell to achieve a target net proceeds amount with minimal taxes.
 
@@ -356,6 +357,8 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         each asset class of that Portfolio Performance taxonomy keeps its weight and the sale
         consolidates within a class onto the most tax-efficient securities (so redundant holdings of
         the same class need not all be sold). Answers 'get X EUR net without changing my allocation'.
+        With a taxonomy, pass min_amount to skip asset classes whose gross sale would fall below it
+        (avoids dust trades); the remaining classes still reach the full target.
         Uses latest known prices. Each row is one FIFO lot showing: securityName, isin, purchase date,
         shares to sell, currency, purchasePrice, costBasis, fees, salePrice, grossProceeds,
         capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax, netProceeds.
@@ -367,6 +370,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
             date: Sale date as ISO string, e.g. '2025-06-15' (defaults to today)
             tax_rate: Personal tax rate in percent (defaults to config or 26.375%)
             taxonomy: Preserve the current asset allocation using this taxonomy's classes (defaults to pure tax minimization)
+            min_amount: Minimum gross sale per asset class; smaller classes are skipped (requires taxonomy)
         """
         portfolio = _ensure_fresh_portfolio()
         sell_date, effective_tax_rate = _sell_defaults(date, tax_rate)
@@ -376,7 +380,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         result = prepare_share_sell_df(
             portfolio, config, sell_date, effective_tax_rate,
             security_id, account_id, target_net=target_net,
-            taxonomy=taxonomy, tax_csv_data=tax_csv_data
+            taxonomy=taxonomy, min_amount=min_amount, tax_csv_data=tax_csv_data
         )
         return _clean_records(result) if not result.empty else []
 

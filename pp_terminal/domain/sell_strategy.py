@@ -147,11 +147,20 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
     group the required value is drawn from the most tax-efficient securities first
     (FIFO within each), consolidating redundant holdings of the same asset class
     instead of selling every one pro-rata.
+
+    When ``min_amount`` is set, any group whose proportional quota (gross proceeds)
+    would fall below it is left unsold to avoid dust trades; the remaining groups
+    still absorb the full target net, so those small classes drift slightly. The
+    names of those skipped groups are exposed via ``excluded_groups`` after
+    ``select_lots`` so the caller can warn about them.
     """
 
-    def __init__(self, target_net: Money, category_by_security: dict[str, str] | None = None):
+    def __init__(self, target_net: Money, category_by_security: dict[str, str] | None = None,
+                 min_amount: Money | None = None):
         self.target_net = target_net
         self.category_by_security = category_by_security or {}
+        self.min_amount = min_amount
+        self.excluded_groups: list[str] = []
 
     def select_lots(self, lots: DataFrame[TaxLotSellSchema]) -> DataFrame[TaxLotSellSchema]:
         if lots.empty:
@@ -166,11 +175,34 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
                 f"Target net {self.target_net:.2f} exceeds maximum achievable {max_net:.2f}"
             )
 
-        fraction = self._solve_fraction(df)
-        selected = self._select_at_fraction(df, fraction)
+        sellable, fraction = self._resolve_included_groups(df)
+        selected = self._select_at_fraction(sellable, fraction)
         return TaxLotSellSchema.validate(
             selected.drop(columns='_group').set_index(['date', 'accountId', 'securityId'])
         )
+
+    def _resolve_included_groups(self, df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
+        """Drop groups too small to sell (quota < min_amount), redistributing to hit the target."""
+        self.excluded_groups = []
+        if not self.min_amount:
+            return df, self._solve_fraction(df)
+
+        group_gross = df.groupby('_group', sort=False)['grossProceeds'].sum()
+        included = list(group_gross.index)
+        while True:
+            current = df[df['_group'].isin(included)]
+            if (current['shares'] * current['netProceedsPerShare']).sum() < self.target_net - 0.005:
+                raise InputError(
+                    f"Reaching a net of {self.target_net:.2f} requires selling amounts below the "
+                    f"{self.min_amount:.2f} minimum; lower --target-net or the minimum"
+                )
+            fraction = self._solve_fraction(current)
+            below = [group for group in included if fraction * group_gross[group] < self.min_amount - 0.005]
+            if not below:
+                return current, fraction
+            smallest = min(below, key=lambda group: group_gross[group])
+            included.remove(smallest)
+            self.excluded_groups.append(str(smallest))
 
     def _solve_fraction(self, df: pd.DataFrame) -> float:
         low, high = 0.0, 1.0

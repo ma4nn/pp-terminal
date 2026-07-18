@@ -28,7 +28,7 @@ import pandas as pd
 import typer
 from mcp.server.fastmcp import FastMCP
 
-from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df
+from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df, summarize_sell_plan
 from pp_terminal.commands.view_accounts import prepare_accounts_df
 from pp_terminal.commands.view_securities import prepare_securities_df
 from pp_terminal.commands.view_taxonomies import prepare_taxonomies_df
@@ -293,13 +293,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         if lots.empty:
             return []
 
-        sum_cols = ['shares', 'costBasis', 'fees', 'grossProceeds', 'capitalGain',
-                    'deemedIncome', 'taxableGain', 'totalTax', 'netProceeds']
-        agg = {col: 'sum' for col in sum_cols}
-        agg['salePrice'] = 'first'
-
-        summary = lots.groupby(['securityName', 'currency'], sort=False).agg(agg).reset_index()
-        return _clean_records(summary[_SUMMARY_COLUMNS])
+        return _clean_records(summarize_sell_plan(lots)[_SUMMARY_COLUMNS])
 
     @mcp.tool()
     def simulate_sell_shares(  # pylint: disable=too-many-arguments,too-many-positional-arguments

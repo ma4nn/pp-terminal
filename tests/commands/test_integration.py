@@ -20,6 +20,7 @@
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -72,6 +73,34 @@ def test_share_sell_csv_output(request: TopRequest) -> None:
 
     expected_output = Path(golden_file).read_text(encoding='utf-8')
     assert result.output == expected_output
+
+
+def test_share_sell_summary_aggregates_per_security(request: TopRequest) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    def _run(*extra: str) -> list[dict[str, Any]]:
+        result = runner.invoke(app, [
+            '--file', str(fixtures_dir / 'kommer.ids.xml'),
+            '--config', str(fixtures_dir / 'kommer.toml'),
+            '--output', 'json',
+            '--no-cache',
+            'simulate', 'share-sell',
+            '--tax-rate', '26.375',
+            *extra,
+        ])
+        assert result.exit_code == 0, f"Command failed with: {result.output}"
+        rows: list[dict[str, Any]] = json.loads(result.output)
+        return rows
+
+    lots = _run()
+    plan = _run('--summary')
+
+    assert len(plan) == len({row['isin'] for row in lots})  # exactly one plan row per security
+    assert len(plan) <= len(lots)
+    assert 'date' not in plan[0]  # per-lot detail dropped
+    assert sum(row['netProceeds'] for row in plan) == pytest.approx(sum(row['netProceeds'] for row in lots))
+    assert sum(row['totalTax'] for row in plan) == pytest.approx(sum(row['totalTax'] for row in lots))
 
 
 def test_share_sell_preserve_allocation(request: TopRequest) -> None:

@@ -25,7 +25,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df, _resolve_categories
+from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df, _resolve_categories, summarize_sell_plan
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.exceptions import InputError
 
@@ -90,6 +90,51 @@ def test_warns_about_held_but_unclassified_securities(warning_log: pytest.LogCap
     assert 'ETF C' in warning_log.text            # the unmapped holding is named
     assert 'ETF A' not in warning_log.text        # mapped holdings are not warned about
     assert 'ETF B' not in warning_log.text
+
+
+def _sell_lots(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Minimal per-lot sell result as produced by prepare_share_sell_df (one row per FIFO lot)."""
+    return pd.DataFrame(rows)
+
+
+def test_summarize_sell_plan_aggregates_lots_per_security() -> None:
+    lots = _sell_lots([
+        {'securityName': 'ETF A', 'isin': 'W1', 'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0,
+         'salePrice': 120.0, 'costBasis': 400.0, 'fees': 2.0, 'grossProceeds': 480.0, 'capitalGain': 80.0,
+         'deemedIncome': 1.0, 'taxableGain': 79.0, 'totalTax': 20.0, 'netProceeds': 460.0},
+        {'securityName': 'ETF A', 'isin': 'W1', 'currency': 'EUR', 'shares': 6.0, 'purchasePrice': 110.0,
+         'salePrice': 120.0, 'costBasis': 660.0, 'fees': 3.0, 'grossProceeds': 720.0, 'capitalGain': 60.0,
+         'deemedIncome': 2.0, 'taxableGain': 58.0, 'totalTax': 15.0, 'netProceeds': 705.0},
+        {'securityName': 'ETF B', 'isin': 'W2', 'currency': 'EUR', 'shares': 5.0, 'purchasePrice': 50.0,
+         'salePrice': 55.0, 'costBasis': 250.0, 'fees': 1.0, 'grossProceeds': 275.0, 'capitalGain': 25.0,
+         'deemedIncome': 0.0, 'taxableGain': 25.0, 'totalTax': 6.0, 'netProceeds': 269.0},
+    ])
+
+    plan = summarize_sell_plan(lots)
+
+    assert list(plan['securityName']) == ['ETF A', 'ETF B']
+    etf_a = plan[plan['securityName'] == 'ETF A'].iloc[0]
+    assert etf_a['shares'] == pytest.approx(10.0)                    # 4 + 6 lots summed
+    assert etf_a['netProceeds'] == pytest.approx(1165.0)            # 460 + 705 summed
+    assert etf_a['totalTax'] == pytest.approx(35.0)
+    assert etf_a['salePrice'] == pytest.approx(120.0)              # constant across lots
+    assert etf_a['purchasePrice'] == pytest.approx(106.0)          # (4*100 + 6*110) / 10 weighted
+
+
+def test_summarize_sell_plan_preserves_total_proceeds() -> None:
+    lots = _sell_lots([
+        {'securityName': 'ETF A', 'isin': 'W1', 'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0,
+         'salePrice': 120.0, 'costBasis': 400.0, 'fees': 2.0, 'grossProceeds': 480.0, 'capitalGain': 80.0,
+         'deemedIncome': 1.0, 'taxableGain': 79.0, 'totalTax': 20.0, 'netProceeds': 460.0},
+        {'securityName': 'ETF B', 'isin': 'W2', 'currency': 'EUR', 'shares': 5.0, 'purchasePrice': 50.0,
+         'salePrice': 55.0, 'costBasis': 250.0, 'fees': 1.0, 'grossProceeds': 275.0, 'capitalGain': 25.0,
+         'deemedIncome': 0.0, 'taxableGain': 25.0, 'totalTax': 6.0, 'netProceeds': 269.0},
+    ])
+
+    plan = summarize_sell_plan(lots)
+
+    assert plan['netProceeds'].sum() == pytest.approx(lots['netProceeds'].sum())
+    assert plan['totalTax'].sum() == pytest.approx(lots['totalTax'].sum())
 
 
 def test_multi_category_warning_only_covers_held_securities(warning_log: pytest.LogCaptureFixture) -> None:

@@ -50,6 +50,23 @@ _RESULT_COLUMNS = ['securityName', 'isin', 'date', 'shares', 'currency', 'purcha
                    'fees', 'salePrice', 'grossProceeds', 'capitalGain', 'deemedIncome',
                    'taxableGain', 'totalTax', 'netProceeds']
 
+_PLAN_GROUP = ['securityName', 'isin', 'currency']
+_PLAN_SUM_COLUMNS = ['shares', 'costBasis', 'fees', 'grossProceeds', 'capitalGain', 'deemedIncome',
+                     'taxableGain', 'totalTax', 'netProceeds']
+_PLAN_COLUMNS = ['securityName', 'isin', 'shares', 'currency', 'purchasePrice', 'costBasis',
+                 'fees', 'salePrice', 'grossProceeds', 'capitalGain', 'deemedIncome',
+                 'taxableGain', 'totalTax', 'netProceeds']
+
+
+def summarize_sell_plan(lots: pd.DataFrame) -> pd.DataFrame:
+    """Collapse the per-lot sell rows into one actionable order per security."""
+    aggregations: dict[str, str] = {column: 'sum' for column in _PLAN_SUM_COLUMNS}
+    aggregations['salePrice'] = 'first'  # constant across a security's lots
+    grouped = lots.assign(weightedCost=lots['purchasePrice'] * lots['shares']).groupby(_PLAN_GROUP, sort=False)
+    plan = grouped.agg({**aggregations, 'weightedCost': 'sum'})
+    plan['purchasePrice'] = plan['weightedCost'] / plan['shares']
+    return plan.reset_index()[_PLAN_COLUMNS]
+
 
 def get_today() -> datetime:
     return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -167,6 +184,7 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
         target_net: Annotated[Money | None, typer.Option("--target-net", help="Target net proceeds to realize (minimizes taxes)", min=0.01)] = None,
         taxonomy: Annotated[str | None, typer.Option("--preserve-allocation", metavar="TAXONOMY", help="Preserve the current asset allocation while reaching --target-net, using this Portfolio Performance taxonomy's classes")] = None,
         min_amount: Annotated[Money | None, typer.Option("--min-amount", help="Skip any asset class whose gross sale would fall below this, to avoid dust trades (only with --preserve-allocation)", min=0.01)] = None,
+        summary: Annotated[bool, typer.Option("--summary", help="Aggregate the FIFO lots into one row per security (an actionable sell plan)")] = False,
         tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data", callback=tax_csv_callback)] = None
 ) -> None:
     """
@@ -194,9 +212,13 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
         console.print(output.empty_result())
         return
 
+    if summary:
+        result = summarize_sell_plan(result)
+
+    title = "Share Sale Plan" if summary else "Share Sale Simulation"
     console.print(*output.result_table(
         result,
-        TableOptions(title=f"Share Sale Simulation on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=True)
+        TableOptions(title=f"{title} on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=True)
     ))
 
     console.print(output.warning('This simulation excludes Sparerpauschbetrag. Multi-currency totals not meaningful.'))

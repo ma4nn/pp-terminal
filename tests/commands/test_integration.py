@@ -20,9 +20,11 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 from _pytest.fixtures import TopRequest
 
+from pp_terminal.exceptions import InputError
 from pp_terminal.main import app
 
 
@@ -69,6 +71,47 @@ def test_share_sell_csv_output(request: TopRequest) -> None:
 
     expected_output = Path(golden_file).read_text(encoding='utf-8')
     assert result.output == expected_output
+
+
+def test_share_sell_preserve_allocation(request: TopRequest) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(fixtures_dir / 'kommer.toml'),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'share-sell',
+        '--target-net', '1000',
+        '--preserve-allocation', 'Anlagekategorien',
+        '--tax-rate', '26.375'
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert rows, "expected at least one lot to be sold"
+    assert sum(row['netProceeds'] for row in rows) == pytest.approx(1000.0, abs=1.0)
+    assert all('isin' in row for row in rows)
+
+
+def test_share_sell_preserve_allocation_requires_target_net(request: TopRequest) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(fixtures_dir / 'kommer.toml'),
+        '--no-cache',
+        'simulate', 'share-sell',
+        '--preserve-allocation', 'Anlagekategorien',
+        '--tax-rate', '26.375'
+    ])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, InputError)
+    assert '--preserve-allocation requires --target-net' in str(result.exception)
 
 
 def test_view_securities_csv_output(request: TopRequest) -> None:

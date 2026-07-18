@@ -64,9 +64,9 @@ def _holdings(security_ids: list[str]) -> pd.Series:
     return pd.Series([10.0] * len(security_ids), index=index, name='shares')
 
 
-def test_taxonomy_requires_preserve_allocation() -> None:
-    """The shared entry point (used by CLI and MCP) rejects taxonomy without preserve_allocation."""
-    with pytest.raises(InputError, match="taxonomy requires preserve_allocation"):
+def test_preserve_allocation_requires_target_net() -> None:
+    """The shared entry point (used by CLI and MCP) rejects a taxonomy without a target net."""
+    with pytest.raises(InputError, match="requires a target net"):
         prepare_share_sell_df(Portfolio(), {}, datetime(2025, 1, 1), 26.375, taxonomy="Anything")
 
 

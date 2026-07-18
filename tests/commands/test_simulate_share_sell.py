@@ -99,13 +99,13 @@ def _sell_lots(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 def test_summarize_sell_plan_aggregates_lots_per_security() -> None:
     lots = _sell_lots([
-        {'securityName': 'ETF A', 'isin': 'W1', 'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0,
+        {'securityName': 'ETF A', 'isin': 'W1', 'account': 'Depot', 'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0,
          'salePrice': 120.0, 'costBasis': 400.0, 'fees': 2.0, 'grossProceeds': 480.0, 'capitalGain': 80.0,
          'deemedIncome': 1.0, 'taxableGain': 79.0, 'totalTax': 20.0, 'netProceeds': 460.0},
-        {'securityName': 'ETF A', 'isin': 'W1', 'currency': 'EUR', 'shares': 6.0, 'purchasePrice': 110.0,
+        {'securityName': 'ETF A', 'isin': 'W1', 'account': 'Depot', 'currency': 'EUR', 'shares': 6.0, 'purchasePrice': 110.0,
          'salePrice': 120.0, 'costBasis': 660.0, 'fees': 3.0, 'grossProceeds': 720.0, 'capitalGain': 60.0,
          'deemedIncome': 2.0, 'taxableGain': 58.0, 'totalTax': 15.0, 'netProceeds': 705.0},
-        {'securityName': 'ETF B', 'isin': 'W2', 'currency': 'EUR', 'shares': 5.0, 'purchasePrice': 50.0,
+        {'securityName': 'ETF B', 'isin': 'W2', 'account': 'Depot', 'currency': 'EUR', 'shares': 5.0, 'purchasePrice': 50.0,
          'salePrice': 55.0, 'costBasis': 250.0, 'fees': 1.0, 'grossProceeds': 275.0, 'capitalGain': 25.0,
          'deemedIncome': 0.0, 'taxableGain': 25.0, 'totalTax': 6.0, 'netProceeds': 269.0},
     ])
@@ -121,12 +121,47 @@ def test_summarize_sell_plan_aggregates_lots_per_security() -> None:
     assert etf_a['purchasePrice'] == pytest.approx(106.0)          # (4*100 + 6*110) / 10 weighted
 
 
-def test_summarize_sell_plan_preserves_total_proceeds() -> None:
+def test_summarize_sell_plan_splits_same_security_across_accounts() -> None:
+    """The same security held in two depots yields two order tickets, not one merged row."""
     lots = _sell_lots([
-        {'securityName': 'ETF A', 'isin': 'W1', 'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0,
+        {'securityName': 'ETF A', 'isin': 'W1', 'account': 'Depot', 'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0,
          'salePrice': 120.0, 'costBasis': 400.0, 'fees': 2.0, 'grossProceeds': 480.0, 'capitalGain': 80.0,
          'deemedIncome': 1.0, 'taxableGain': 79.0, 'totalTax': 20.0, 'netProceeds': 460.0},
-        {'securityName': 'ETF B', 'isin': 'W2', 'currency': 'EUR', 'shares': 5.0, 'purchasePrice': 50.0,
+        {'securityName': 'ETF A', 'isin': 'W1', 'account': 'Zweitdepot', 'currency': 'EUR', 'shares': 6.0, 'purchasePrice': 110.0,
+         'salePrice': 120.0, 'costBasis': 660.0, 'fees': 3.0, 'grossProceeds': 720.0, 'capitalGain': 60.0,
+         'deemedIncome': 2.0, 'taxableGain': 58.0, 'totalTax': 15.0, 'netProceeds': 705.0},
+    ])
+
+    plan = summarize_sell_plan(lots)
+
+    assert set(plan['account']) == {'Depot', 'Zweitdepot'}
+    assert plan[plan['account'] == 'Depot'].iloc[0]['shares'] == pytest.approx(4.0)
+    assert plan[plan['account'] == 'Zweitdepot'].iloc[0]['shares'] == pytest.approx(6.0)
+
+
+def test_summarize_sell_plan_keeps_securities_without_isin() -> None:
+    """A security without an ISIN (e.g. crypto) must not be dropped, or the plan total under-reports."""
+    lots = _sell_lots([
+        {'securityName': 'ETF A', 'isin': 'W1', 'account': 'Depot', 'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0,
+         'salePrice': 120.0, 'costBasis': 400.0, 'fees': 2.0, 'grossProceeds': 480.0, 'capitalGain': 80.0,
+         'deemedIncome': 1.0, 'taxableGain': 79.0, 'totalTax': 20.0, 'netProceeds': 460.0},
+        {'securityName': 'Bitcoin', 'isin': None, 'account': 'Krypto', 'currency': 'EUR', 'shares': 0.5, 'purchasePrice': 20000.0,
+         'salePrice': 30000.0, 'costBasis': 10000.0, 'fees': 0.0, 'grossProceeds': 15000.0, 'capitalGain': 5000.0,
+         'deemedIncome': 0.0, 'taxableGain': 5000.0, 'totalTax': 1300.0, 'netProceeds': 13700.0},
+    ])
+
+    plan = summarize_sell_plan(lots)
+
+    assert set(plan['securityName']) == {'ETF A', 'Bitcoin'}
+    assert plan['netProceeds'].sum() == pytest.approx(lots['netProceeds'].sum())  # nothing silently dropped
+
+
+def test_summarize_sell_plan_preserves_total_proceeds() -> None:
+    lots = _sell_lots([
+        {'securityName': 'ETF A', 'isin': 'W1', 'account': 'Depot', 'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0,
+         'salePrice': 120.0, 'costBasis': 400.0, 'fees': 2.0, 'grossProceeds': 480.0, 'capitalGain': 80.0,
+         'deemedIncome': 1.0, 'taxableGain': 79.0, 'totalTax': 20.0, 'netProceeds': 460.0},
+        {'securityName': 'ETF B', 'isin': 'W2', 'account': 'Depot', 'currency': 'EUR', 'shares': 5.0, 'purchasePrice': 50.0,
          'salePrice': 55.0, 'costBasis': 250.0, 'fees': 1.0, 'grossProceeds': 275.0, 'capitalGain': 25.0,
          'deemedIncome': 0.0, 'taxableGain': 25.0, 'totalTax': 6.0, 'netProceeds': 269.0},
     ])

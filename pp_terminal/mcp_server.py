@@ -69,7 +69,7 @@ All dates are ISO format strings (e.g. '2025-06-15'). All monetary amounts are i
 native currency. Tax rates are in percent (e.g. 26.375 for German Abgeltungssteuer + Soli).
 """
 
-_SUMMARY_COLUMNS = ['securityName', 'currency', 'shares', 'salePrice', 'costBasis',
+_SUMMARY_COLUMNS = ['securityName', 'account', 'currency', 'shares', 'salePrice', 'costBasis',
                     'fees', 'grossProceeds', 'capitalGain', 'deemedIncome',
                     'taxableGain', 'totalTax', 'netProceeds']
 
@@ -243,7 +243,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
     ) -> list[dict[str, Any]]:
         """List all FIFO purchase lots with projected tax on hypothetical sale.
 
-        Each row is one purchase lot (FIFO order) showing: securityName, isin, purchase date, shares,
+        Each row is one purchase lot (FIFO order) showing: securityName, isin, account, purchase date, shares,
         currency, purchasePrice, costBasis, fees, salePrice, grossProceeds, capitalGain,
         deemedIncome (Vorabpauschale), taxableGain, totalTax, netProceeds.
 
@@ -273,8 +273,8 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """Simulate selling all shares and return a per-security summary with totals.
 
         Use this to answer questions like 'what if I sell everything?' or 'how much tax on my portfolio?'.
-        Each row is one security showing: securityName, currency, shares, salePrice, costBasis,
-        fees, grossProceeds, capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax,
+        Each row is one security per account showing: securityName, account, currency, shares, salePrice,
+        costBasis, fees, grossProceeds, capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax,
         netProceeds. For individual FIFO lot detail, use query_fifo_lots instead.
         To target a specific net amount (e.g. 'I need 1000 EUR after tax'), use simulate_sell_target_net instead.
 

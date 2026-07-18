@@ -46,14 +46,14 @@ app = typer.Typer()
 console = Console()
 log = logging.getLogger(__name__)
 
-_RESULT_COLUMNS = ['securityName', 'isin', 'date', 'shares', 'currency', 'purchasePrice', 'costBasis',
+_RESULT_COLUMNS = ['securityName', 'isin', 'account', 'date', 'shares', 'currency', 'purchasePrice', 'costBasis',
                    'fees', 'salePrice', 'grossProceeds', 'capitalGain', 'deemedIncome',
                    'taxableGain', 'totalTax', 'netProceeds']
 
-_PLAN_GROUP = ['securityName', 'isin', 'currency']
+_PLAN_GROUP = ['securityName', 'isin', 'account', 'currency']
 _PLAN_SUM_COLUMNS = ['shares', 'costBasis', 'fees', 'grossProceeds', 'capitalGain', 'deemedIncome',
                      'taxableGain', 'totalTax', 'netProceeds']
-_PLAN_COLUMNS = ['securityName', 'isin', 'shares', 'currency', 'purchasePrice', 'costBasis',
+_PLAN_COLUMNS = ['securityName', 'isin', 'account', 'shares', 'currency', 'purchasePrice', 'costBasis',
                  'fees', 'salePrice', 'grossProceeds', 'capitalGain', 'deemedIncome',
                  'taxableGain', 'totalTax', 'netProceeds']
 
@@ -62,7 +62,8 @@ def summarize_sell_plan(lots: pd.DataFrame) -> pd.DataFrame:
     """Collapse the per-lot sell rows into one actionable order per security."""
     aggregations: dict[str, str] = {column: 'sum' for column in _PLAN_SUM_COLUMNS}
     aggregations['salePrice'] = 'first'  # constant across a security's lots
-    grouped = lots.assign(weightedCost=lots['purchasePrice'] * lots['shares']).groupby(_PLAN_GROUP, sort=False)
+    # dropna=False keeps securities without an ISIN (e.g. crypto), otherwise their proceeds vanish from the total
+    grouped = lots.assign(weightedCost=lots['purchasePrice'] * lots['shares']).groupby(_PLAN_GROUP, sort=False, dropna=False)
     plan = grouped.agg({**aggregations, 'weightedCost': 'sum'})
     plan['purchasePrice'] = plan['weightedCost'] / plan['shares']
     return plan.reset_index()[_PLAN_COLUMNS]
@@ -141,6 +142,7 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
     security_info = portfolio.securities.reindex(columns=['name', 'isin'])
     result['securityName'] = result['securityId'].map(security_info['name'])
     result['isin'] = result['securityId'].map(security_info['isin'])
+    result['account'] = result['accountId'].map(portfolio.securities_accounts['name']).fillna(result['accountId'])
     result = result.sort_values(['securityName', 'date'])
 
     return result[_RESULT_COLUMNS]

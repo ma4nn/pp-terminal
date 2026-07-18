@@ -96,7 +96,8 @@ def test_share_sell_summary_aggregates_per_security(request: TopRequest) -> None
     lots = _run()
     plan = _run('--summary')
 
-    assert len(plan) == len({row['isin'] for row in lots})  # exactly one plan row per security
+    assert 'account' in lots[0] and 'account' in plan[0]  # depot surfaced in both views
+    assert len(plan) == len({(row['isin'], row['account']) for row in lots})  # one plan row per (security, account)
     assert len(plan) <= len(lots)
     assert 'date' not in plan[0]  # per-lot detail dropped
     assert sum(row['netProceeds'] for row in plan) == pytest.approx(sum(row['netProceeds'] for row in lots))

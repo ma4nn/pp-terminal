@@ -139,6 +139,26 @@ def test_summarize_sell_plan_splits_same_security_across_accounts() -> None:
     assert plan[plan['account'] == 'Zweitdepot'].iloc[0]['shares'] == pytest.approx(6.0)
 
 
+def test_summarize_sell_plan_carries_asset_class_when_present() -> None:
+    """With --preserve-allocation the lots carry an assetClass; it must lead the plan and cluster securities."""
+    lots = _sell_lots([
+        {'assetClass': 'Equity', 'securityName': 'ETF A', 'isin': 'W1', 'account': 'Depot', 'currency': 'EUR',
+         'shares': 4.0, 'purchasePrice': 100.0, 'salePrice': 120.0, 'costBasis': 400.0, 'fees': 2.0,
+         'grossProceeds': 480.0, 'capitalGain': 80.0, 'deemedIncome': 1.0, 'taxableGain': 79.0,
+         'totalTax': 20.0, 'netProceeds': 460.0},
+        {'assetClass': 'Equity', 'securityName': 'ETF B', 'isin': 'W2', 'account': 'Depot', 'currency': 'EUR',
+         'shares': 5.0, 'purchasePrice': 50.0, 'salePrice': 55.0, 'costBasis': 250.0, 'fees': 1.0,
+         'grossProceeds': 275.0, 'capitalGain': 25.0, 'deemedIncome': 0.0, 'taxableGain': 25.0,
+         'totalTax': 6.0, 'netProceeds': 269.0},
+    ])
+
+    plan = summarize_sell_plan(lots)
+
+    assert list(plan.columns)[0] == 'assetClass'
+    assert list(plan['assetClass']) == ['Equity', 'Equity']
+    assert list(plan['securityName']) == ['ETF A', 'ETF B']  # two securities kept distinct within the class
+
+
 def test_summarize_sell_plan_keeps_securities_without_isin() -> None:
     """A security without an ISIN (e.g. crypto) must not be dropped, or the plan total under-reports."""
     lots = _sell_lots([

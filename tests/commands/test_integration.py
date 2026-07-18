@@ -99,7 +99,9 @@ def test_share_sell_summary_aggregates_per_security(request: TopRequest) -> None
     assert 'account' in lots[0] and 'account' in plan[0]  # depot surfaced in both views
     assert len(plan) == len({(row['isin'], row['account']) for row in lots})  # one plan row per (security, account)
     assert len(plan) <= len(lots)
-    assert 'date' not in plan[0]  # per-lot detail dropped
+    assert {'shares', 'salePrice', 'grossProceeds', 'capitalGain', 'totalTax', 'netProceeds'} <= plan[0].keys()
+    # cost-basis / tax-mechanics columns are left to the per-lot detail view only
+    assert not ({'date', 'purchasePrice', 'costBasis', 'fees', 'deemedIncome', 'taxableGain'} & plan[0].keys())
     assert sum(row['netProceeds'] for row in plan) == pytest.approx(sum(row['netProceeds'] for row in lots))
     assert sum(row['totalTax'] for row in plan) == pytest.approx(sum(row['totalTax'] for row in lots))
 
@@ -125,6 +127,30 @@ def test_share_sell_preserve_allocation(request: TopRequest) -> None:
     assert rows, "expected at least one lot to be sold"
     assert sum(row['netProceeds'] for row in rows) == pytest.approx(1000.0, abs=1.0)
     assert all('isin' in row for row in rows)
+    assert all(row.get('assetClass') for row in rows)  # taxonomy category surfaced on every row
+
+
+def test_share_sell_preserve_allocation_summary_keeps_asset_class(request: TopRequest) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(fixtures_dir / 'kommer.toml'),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'share-sell',
+        '--target-net', '1000',
+        '--preserve-allocation', 'Anlagekategorien',
+        '--summary',
+        '--tax-rate', '26.375',
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert rows and all(row.get('assetClass') for row in rows)  # asset class carried into the summary plan
+    assert sum(row['netProceeds'] for row in rows) == pytest.approx(1000.0, abs=1.0)  # total still preserved
 
 
 def test_share_sell_preserve_allocation_min_amount(request: TopRequest, caplog: pytest.LogCaptureFixture) -> None:

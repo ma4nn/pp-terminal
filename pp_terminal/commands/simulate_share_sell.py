@@ -57,16 +57,23 @@ _PLAN_COLUMNS = ['securityName', 'isin', 'account', 'shares', 'currency', 'purch
                  'fees', 'salePrice', 'grossProceeds', 'capitalGain', 'deemedIncome',
                  'taxableGain', 'totalTax', 'netProceeds']
 
+# lean plan for the CLI: identity + order + gain/tax outcome; the cost-basis/tax mechanics stay in the per-lot detail
+_PLAN_DISPLAY_COLUMNS = ['securityName', 'isin', 'account', 'shares', 'currency', 'salePrice',
+                         'grossProceeds', 'capitalGain', 'totalTax', 'netProceeds']
+
 
 def summarize_sell_plan(lots: pd.DataFrame) -> pd.DataFrame:
     """Collapse the per-lot sell rows into one actionable order per security."""
+    with_class = 'assetClass' in lots.columns
+    group = ['assetClass', *_PLAN_GROUP] if with_class else _PLAN_GROUP
+    columns = ['assetClass', *_PLAN_COLUMNS] if with_class else _PLAN_COLUMNS
     aggregations: dict[str, str] = {column: 'sum' for column in _PLAN_SUM_COLUMNS}
     aggregations['salePrice'] = 'first'  # constant across a security's lots
     # dropna=False keeps securities without an ISIN (e.g. crypto), otherwise their proceeds vanish from the total
-    grouped = lots.assign(weightedCost=lots['purchasePrice'] * lots['shares']).groupby(_PLAN_GROUP, sort=False, dropna=False)
+    grouped = lots.assign(weightedCost=lots['purchasePrice'] * lots['shares']).groupby(group, sort=False, dropna=False)
     plan = grouped.agg({**aggregations, 'weightedCost': 'sum'})
     plan['purchasePrice'] = plan['weightedCost'] / plan['shares']
-    return plan.reset_index()[_PLAN_COLUMNS]
+    return plan.reset_index()[columns]
 
 
 def get_today() -> datetime:
@@ -143,9 +150,13 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
     result['securityName'] = result['securityId'].map(security_info['name'])
     result['isin'] = result['securityId'].map(security_info['isin'])
     result['account'] = result['accountId'].map(portfolio.securities_accounts['name']).fillna(result['accountId'])
-    result = result.sort_values(['securityName', 'date'])
 
-    return result[_RESULT_COLUMNS]
+    columns, sort_keys = _RESULT_COLUMNS, ['securityName', 'date']
+    if taxonomy:
+        result['assetClass'] = result['securityId'].map(category_by_security).fillna('(unclassified)')
+        columns, sort_keys = ['assetClass', *_RESULT_COLUMNS], ['assetClass', *sort_keys]
+
+    return result.sort_values(sort_keys)[columns]
 
 
 def _resolve_categories(portfolio: Portfolio, taxonomy: str, holdings: pd.Series) -> dict[str, str]:
@@ -216,6 +227,8 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
 
     if summary:
         result = summarize_sell_plan(result)
+        lead = ['assetClass'] if 'assetClass' in result.columns else []
+        result = result[lead + _PLAN_DISPLAY_COLUMNS]
 
     title = "Share Sale Plan" if summary else "Share Sale Simulation"
     console.print(*output.result_table(

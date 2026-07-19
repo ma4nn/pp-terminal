@@ -17,14 +17,14 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import cast
+from typing import Any, cast
 
 import pandas as pd
 import typer
 
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.output.strategy import OutputStrategy, Console
-from pp_terminal.output.table_decorator import TableOptions
+from pp_terminal.output.table_decorator import TableOptions, format_value
 from pp_terminal.utils.helper import footer
 
 app = typer.Typer()
@@ -50,6 +50,13 @@ def prepare_taxonomies_df(portfolio: Portfolio) -> pd.DataFrame:
     return counts[['Taxonomy', 'Category', 'Securities', 'Accounts']].sort_values(['Taxonomy', 'Category'])
 
 
+def _format_counts(value: Any, column_name: str, row: pd.Series) -> str:
+    if column_name in ('Securities', 'Accounts'):
+        return '' if pd.isna(value) else str(int(value))
+
+    return format_value(value, column_name, row)
+
+
 @app.command(name="taxonomies")
 def print_taxonomies(ctx: typer.Context) -> None:
     """Show all taxonomies with their categories and assignment counts."""
@@ -59,6 +66,6 @@ def print_taxonomies(ctx: typer.Context) -> None:
     df = prepare_taxonomies_df(portfolio)
 
     console.print(*output.result_table(
-        df, TableOptions(title="Taxonomies", caption=f"{len(df)} categories", show_index=False)
+        df, TableOptions(title="Taxonomies", caption=f"{len(df)} categories", show_index=False, value_formatter=_format_counts)
     ))
     console.print(output.text(footer()), style="dim")

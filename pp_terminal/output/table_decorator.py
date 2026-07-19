@@ -18,6 +18,7 @@
 """
 
 import re
+from dataclasses import dataclass, field
 from typing import Literal, Callable, Any
 
 import pandas as pd
@@ -81,24 +82,15 @@ def format_value(value: Any, column_name: str, row: pd.Series, attribute_types: 
     return str(value)
 
 
+@dataclass
 class TableOptions:  # pylint: disable=too-few-public-methods
-    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-            self,
-            title: str = '',
-            caption: str = '',
-            show_index: bool = True,
-            show_total: bool = True,
-            footer_lines: int = 0,
-            value_formatter: Callable[[Any, str, pd.Series], str] = format_value,
-            dimmed_rows: set[Any] | None = None
-    ) -> None:
-        self.title = title
-        self.caption = caption
-        self.show_index = show_index
-        self.show_total = show_total
-        self.footer_lines = footer_lines
-        self.value_formatter = value_formatter
-        self.dimmed_rows = dimmed_rows or set()
+    title: str = ''
+    caption: str = ''
+    show_index: bool = True
+    show_total: bool = True
+    footer_lines: int = 0
+    value_formatter: Callable[[Any, str, pd.Series], str] = format_value
+    dimmed_rows: set[Any] = field(default_factory=set)
 
 
 class TableDecorator(Table):

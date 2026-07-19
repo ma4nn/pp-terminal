@@ -81,3 +81,7 @@ def test_print_taxonomies(portfolio_with_taxonomies: Portfolio, capsys: pytest.C
     assert 'Equities' in captured.out
     assert 'Bonds' in captured.out
     assert 'Cash' in captured.out
+    # counts (incl. the Total footer of 2 securities) render as integers, not decimals
+    assert '1.00' not in captured.out
+    assert '2.00' not in captured.out
+    assert ' 2 ' in captured.out

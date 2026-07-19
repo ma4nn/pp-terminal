@@ -23,7 +23,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 from pp_terminal.data.filters import filter_by_security
-from pp_terminal.domain.cost_basis import calculate_fifo_sell, apply_allowance
+from pp_terminal.domain.cost_basis import SellContext, calculate_fifo_sell, apply_allowance
 
 from pp_terminal.exceptions import InputError
 from pp_terminal.domain.portfolio import Portfolio
@@ -69,7 +69,7 @@ def test_fifo_lots_single_purchase(share_sell_portfolio: Portfolio) -> None:
     snapshot = PortfolioSnapshot(share_sell_portfolio, datetime(2024, 12, 31))
 
     transactions = snapshot.securities_account_transactions.pipe(filter_by_security, security_id='sec1')
-    lots = calculate_fifo_sell(transactions, datetime(2024, 12, 31), shares_to_sell=30.0, sell_price=160.0, tax_rate=26.375)
+    lots = calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 160.0, 26.375), shares_to_sell=30.0)
 
     assert len(lots) == 1
     assert lots.iloc[0]['shares'] == pytest.approx(30.0)
@@ -87,7 +87,7 @@ def test_fifo_lots_multiple_purchases(share_sell_portfolio: Portfolio) -> None:
     # Sell 120 shares: 50 from first purchase, 50 from second, 20 from third
     snapshot = PortfolioSnapshot(share_sell_portfolio, datetime(2024, 12, 31))
     transactions = snapshot.securities_account_transactions.pipe(filter_by_security, security_id='sec1')
-    lots = calculate_fifo_sell(transactions, datetime(2024, 12, 31), shares_to_sell=120.0, sell_price=160.0, tax_rate=26.375)
+    lots = calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 160.0, 26.375), shares_to_sell=120.0)
 
     assert len(lots) == 3
 
@@ -123,14 +123,14 @@ def test_fifo_lots_insufficient_shares(share_sell_portfolio: Portfolio) -> None:
     transactions = snapshot.securities_account_transactions.pipe(filter_by_security, security_id='sec1')
 
     with pytest.raises(InputError, match="Insufficient shares"):
-        calculate_fifo_sell(transactions, datetime(2024, 12, 31), shares_to_sell=200.0, sell_price=160.0, tax_rate=26.375)
+        calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 160.0, 26.375), shares_to_sell=200.0)
 
 
 def _sell_120(share_sell_portfolio: Portfolio) -> pd.DataFrame:
     snapshot = PortfolioSnapshot(share_sell_portfolio, datetime(2024, 12, 31))
     transactions = snapshot.securities_account_transactions.pipe(filter_by_security, security_id='sec1')
     # 3 lots, taxable gains 3000 + 1000 + 200 = 4200 (exemption rate 0 here)
-    return calculate_fifo_sell(transactions, datetime(2024, 12, 31), shares_to_sell=120.0, sell_price=160.0, tax_rate=26.375)
+    return calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 160.0, 26.375), shares_to_sell=120.0)
 
 
 def test_apply_allowance_reduces_total_tax(share_sell_portfolio: Portfolio) -> None:

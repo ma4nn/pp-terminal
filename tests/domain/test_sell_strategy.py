@@ -24,7 +24,7 @@ import pandas as pd
 import pytest
 from pandera.typing import DataFrame
 
-from pp_terminal.domain.cost_basis import enrich_fifo_lots, finalize_sell_lots
+from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots, finalize_sell_lots
 from pp_terminal.domain.sell_strategy import FixedSharesStrategy, MinTaxStrategy, AllocationPreservingStrategy
 from pp_terminal.domain.schemas import AccountType, TransactionType, TaxLotSellSchema
 from pp_terminal.domain.portfolio import Portfolio
@@ -71,7 +71,7 @@ def _enrich(portfolio: Portfolio, sell_price: float, acc_id: str = 'acc-1', sec_
     transactions = snapshot.securities_account_transactions.pipe(
         filter_by_account_and_security, account_id=acc_id, security_id=sec_id
     )
-    return enrich_fifo_lots(transactions, sell_date, sell_price, TAX_RATE)
+    return enrich_fifo_lots(transactions, SellContext(sell_date, sell_price, TAX_RATE))
 
 
 def _enrich_multi(portfolio: Portfolio, sell_price: float, sell_date: datetime | None = None) -> DataFrame[TaxLotSellSchema]:
@@ -84,7 +84,7 @@ def _enrich_multi(portfolio: Portfolio, sell_price: float, sell_date: datetime |
         transactions = snapshot.securities_account_transactions.pipe(
             filter_by_account_and_security, account_id=acc_id, security_id=sec_id
         )
-        enriched = enrich_fifo_lots(transactions, sell_date, sell_price, TAX_RATE)
+        enriched = enrich_fifo_lots(transactions, SellContext(sell_date, sell_price, TAX_RATE))
         if not enriched.empty:
             all_enriched.append(enriched)
     return pd.concat(all_enriched) if all_enriched else TaxLotSellSchema.empty()
@@ -276,7 +276,7 @@ class TestMinTaxStrategy:
             )
             # sec-1 sell at 0 (nps=0), sec-2 sell at 100 (nps>0)
             sp = 0.0 if sec_id == 'sec-1' else 100.0
-            enriched = enrich_fifo_lots(transactions, sell_date, sp, TAX_RATE)
+            enriched = enrich_fifo_lots(transactions, SellContext(sell_date, sp, TAX_RATE))
             if not enriched.empty:
                 all_enriched.append(enriched)
 
@@ -503,7 +503,7 @@ class TestAllocationPreservingStrategyMinAmount:
 
         sec_ids = set(result.reset_index()['securityId'].unique())
         assert 'sec-4' in sec_ids  # Cash quota clears a 10.0 minimum, so it is still sold
-        assert strategy.excluded_groups == []
+        assert not strategy.excluded_groups
 
     def test_infeasible_target_raises(self) -> None:
         enriched = self._enriched()

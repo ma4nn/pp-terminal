@@ -28,7 +28,7 @@ import typer
 from pandera.typing import DataFrame
 
 from pp_terminal.data.filters import filter_by_account_and_security, filter_by_security, filter_by_account
-from pp_terminal.domain.cost_basis import enrich_fifo_lots, finalize_sell_lots, apply_allowance
+from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots, finalize_sell_lots, apply_allowance
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.sell_strategy import SellStrategy, FixedSharesStrategy, MinTaxStrategy, AllocationPreservingStrategy
 from pp_terminal.domain.allocation import build_category_map
@@ -120,16 +120,15 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
     if missing_prices:
         raise InputError(f"No price data for: {', '.join(missing_prices)}")
 
+    exempt_rate = get_exempt_rate(config)
     all_enriched = []
     for (acc_id, sec_id, _currency), _shares_held in holdings.items():
         transactions = snapshot.securities_account_transactions.pipe(
             filter_by_account_and_security, security_id=sec_id, account_id=acc_id
         )
         sale_price = price if price else latest_prices.loc[sec_id]
-        enriched = enrich_fifo_lots(
-            transactions, snapshot.date, sale_price, tax_rate,
-            tax_csv_data, exempt_rate=get_exempt_rate(config)
-        )
+        sell_ctx = SellContext(snapshot.date, sale_price, tax_rate, exempt_rate, tax_csv_data)
+        enriched = enrich_fifo_lots(transactions, sell_ctx)
         if not enriched.empty:
             all_enriched.append(enriched)
 

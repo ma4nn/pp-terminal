@@ -17,6 +17,7 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 import logging
 
@@ -29,6 +30,17 @@ from pp_terminal.domain.schemas import TransactionType, Money, TransactionSchema
 from pp_terminal.domain.sell_strategy import FixedSharesStrategy
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SellContext:
+    """Parameters describing a simulated sale: the date, price per share, and the applicable tax rules."""
+    sell_date: datetime
+    sell_price: Money
+    tax_rate: Percent
+    exempt_rate: Percent = 0.0
+    tax_csv_data: DataFrame[TaxPaidSchema] | None = None
+
 
 def _filter_purchase_transactions(transactions: DataFrame[TransactionSchema]) -> DataFrame[TransactionSchema]:
     valid_purchases = transactions.pipe(filter_by_type, transaction_types=[TransactionType.BUY, TransactionType.DELIVERY_INBOUND]).sort_index(level='date')
@@ -122,28 +134,21 @@ def _compute_sell_metrics(df: DataFrame[TaxLotSellSchema], tax_rate: Percent) ->
     return df
 
 
-def enrich_fifo_lots(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        transactions: DataFrame[TransactionSchema],
-        sell_date: datetime,
-        sell_price: Money,
-        tax_rate: Percent,
-        tax_csv_data: DataFrame[TaxPaidSchema] | None = None,
-        exempt_rate: Percent = 0.0
-) -> DataFrame[TaxLotSellSchema]:
+def enrich_fifo_lots(transactions: DataFrame[TransactionSchema], ctx: SellContext) -> DataFrame[TaxLotSellSchema]:
     """Compute all sell metrics for remaining FIFO lots assuming full lot sale."""
     df = _get_remaining_lots_after_fifo_matching(transactions)
     if df.empty:
         return TaxLotSellSchema.empty()
 
     df = TaxLotSchema.validate(df)
-    df['salePrice'] = sell_price
-    df['exemptRate'] = exempt_rate
-    df['deemedIncome'] = calculate_prepaid_tax_per_lot(df, sell_date, tax_csv_data).values
+    df['salePrice'] = ctx.sell_price
+    df['exemptRate'] = ctx.exempt_rate
+    df['deemedIncome'] = calculate_prepaid_tax_per_lot(df, ctx.sell_date, ctx.tax_csv_data).values
 
     df['feePerShare'] = df['fees'].fillna(0) / df['shares']
     df['deemedIncomePerShare'] = df['deemedIncome'] / df['shares']
 
-    df = _compute_sell_metrics(df, tax_rate)
+    df = _compute_sell_metrics(df, ctx.tax_rate)
     return df
 
 
@@ -179,23 +184,19 @@ def apply_allowance(lots: DataFrame[TaxLotSellSchema], allowance: Money, tax_rat
     return TaxLotSellSchema.validate(df)
 
 
-def calculate_fifo_sell(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def calculate_fifo_sell(
         transactions: DataFrame[TransactionSchema],
-        sell_date: datetime,
-        sell_price: Money,
-        tax_rate: Percent,
-        shares_to_sell: float | None = None,
-        tax_csv_data: DataFrame[TaxPaidSchema] | None = None,
-        exempt_rate: Percent = 0.0
+        ctx: SellContext,
+        shares_to_sell: float | None = None
 ) -> DataFrame[TaxLotSellSchema]:
     """Calculate FIFO lots for shares being sold, including prepaid tax calculations."""
-    df = enrich_fifo_lots(transactions, sell_date, sell_price, tax_rate, tax_csv_data, exempt_rate)
+    df = enrich_fifo_lots(transactions, ctx)
     if df.empty:
         return TaxLotSellSchema.empty()
 
     if shares_to_sell is not None:
         df = FixedSharesStrategy(shares_to_sell).select_lots(df)
-        df = finalize_sell_lots(df, tax_rate)
+        df = finalize_sell_lots(df, ctx.tax_rate)
 
     return TaxLotSellSchema.validate(df)
 

@@ -19,7 +19,7 @@ test:
 	poetry run coverage run --data-file=tests/.coverage -m pytest tests
 
 test-mutations:
-	poetry run mutmut run && poetry run mutmut results
+	poetry run mutmut run; status=$$?; poetry run mutmut results; exit $$status
 
 build: install check test
 	poetry build

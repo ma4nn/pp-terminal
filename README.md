@@ -81,6 +81,7 @@ fields = ["AccountId", "Name", "Balance"]  # call with --fields=xx to see a list
 | Command               | Description                                                                                        |
 |-----------------------|----------------------------------------------------------------------------------------------------|
 | `simulate interest`   | Calculate how much interest you should have been earned per account and compare with actual values |
+| `simulate pmt`        | Calculate this year's net (after German tax) withdrawal so the portfolio lasts exactly N years at an assumed real return (amortization / annuity, recompute yearly) |
 | `simulate share-sell` | Calculate gains and taxes if a security would be sold in future (based on FIFO capital gains)      |
 | `simulate vap`        | Run a simulation for the expected German preliminary tax ("Vorabpauschale") on the portfolio       |
 

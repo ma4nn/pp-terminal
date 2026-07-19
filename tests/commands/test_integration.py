@@ -308,6 +308,30 @@ def test_share_sell_preserve_allocation_requires_target_net(request: TopRequest)
     assert '--preserve-allocation requires --target-net' in str(result.exception)
 
 
+def test_pmt_json_output(request: TopRequest) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'pmt',
+        '--return', '5',
+        '--years', '30',
+        '--tax-rate', '26.375',
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert len(rows) == 1
+    row = rows[0]
+    assert {'assumedReturn', 'grossPerYear', 'netPerYear', 'netPerMonth', 'netRate'} <= row.keys()
+    assert 0 < row['netPerYear'] <= row['grossPerYear']
+    assert row['netPerMonth'] == pytest.approx(row['netPerYear'] / 12)
+
+
 def test_view_securities_csv_output(request: TopRequest) -> None:
     runner = CliRunner()
     fixtures_dir = request.path.parent.parent / 'fixtures'

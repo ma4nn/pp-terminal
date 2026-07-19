@@ -1,0 +1,161 @@
+"""
+    Copyright (C) 2025-26 Dipl.-Ing. Christoph Massmann <chris@dev-investor.de>
+
+    This file is part of pp-terminal.
+
+    pp-terminal is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    pp-terminal is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
+"""
+
+from datetime import datetime
+
+import pandas as pd
+import pytest
+
+from pp_terminal.commands.simulate_pmt import amortization_factor, prepare_pmt_result, _next_step_hint
+from pp_terminal.domain.portfolio import Portfolio
+from pp_terminal.domain.schemas import AccountType, TransactionType
+from pp_terminal.exceptions import InputError
+
+
+_DATE = datetime(2025, 1, 1)
+_TAX_RATE = 26.375
+
+
+def _deposit_account(amount: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+    accounts = pd.DataFrame([
+        ['Cash Account', AccountType.DEPOSIT.value, None, False, 'EUR'],
+    ], columns=['name', 'type', 'referenceAccount', 'isRetired', 'currency'], index=['dep-1'])
+    accounts.index.name = 'accountId'
+
+    transaction_type = TransactionType.DEPOSIT.value if amount >= 0 else TransactionType.REMOVAL.value
+    transactions = pd.DataFrame([
+        [datetime(2020, 1, 1), 'dep-1', None, transaction_type, amount, 0.0, AccountType.DEPOSIT.value, 'EUR', 0.0, 0.0],
+    ], columns=['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees'])
+    transactions = transactions.set_index(['date', 'accountId', 'securityId'])
+
+    return accounts, transactions
+
+
+@pytest.fixture(name='portfolio_with_prices')
+def provide_portfolio_with_prices(portfolio_with_purchases: Portfolio) -> Portfolio:
+    """45 shares of sec-1 with a cost basis of 4500, priced at 200 -> market value 9000, capital gain 4500."""
+    prices = pd.DataFrame([
+        [datetime(2024, 12, 31), 'sec-1', 200.0],
+    ], columns=['date', 'securityId', 'price']).set_index(['date', 'securityId'])
+
+    return Portfolio(
+        accounts=portfolio_with_purchases.securities_accounts,
+        transactions=portfolio_with_purchases.securities_account_transactions,
+        securities=portfolio_with_purchases.securities,
+        prices=prices,
+    )
+
+
+@pytest.fixture(name='cash_only_portfolio')
+def provide_cash_only_portfolio() -> Portfolio:
+    accounts, transactions = _deposit_account(100000.0)
+    return Portfolio(accounts=accounts, transactions=transactions)
+
+
+def test_amortization_factor_zero_rate_is_linear() -> None:
+    assert amortization_factor(0, 30) == pytest.approx(1 / 30)
+    assert amortization_factor(0, 1) == pytest.approx(1.0)
+
+
+def test_amortization_factor_known_annuity_value() -> None:
+    assert amortization_factor(0.05, 30) == pytest.approx(0.0619537, abs=1e-6)
+
+
+@pytest.mark.parametrize('rate', [0.0, 0.02, 0.05, 0.08])
+def test_amortization_factor_depletes_capital_exactly(rate: float) -> None:
+    years, balance = 30, 100000.0
+    withdrawal = balance * amortization_factor(rate, years)
+    for _ in range(years):
+        balance = (balance - withdrawal) * (1 + rate)
+    assert balance == pytest.approx(0, abs=1e-6)
+
+
+def test_prepare_pmt_result_taxes_the_drawn_gain(portfolio_with_prices: Portfolio) -> None:
+    result = prepare_pmt_result(portfolio_with_prices, {}, _DATE, _TAX_RATE, 5.0, 30, allowance=0.0)
+
+    row = result.iloc[0]
+    gross = 9000.0 * amortization_factor(0.05, 30)
+    gain_per_euro = 4500.0 * (1 - 0.30) / 9000.0  # default 30% Teilfreistellung
+    expected_tax = gross * gain_per_euro * _TAX_RATE / 100
+
+    assert row['grossPerYear'] == pytest.approx(gross)
+    assert row['netPerYear'] == pytest.approx(gross - expected_tax)
+    assert row['netPerYear'] < row['grossPerYear']
+    assert row['netPerMonth'] == pytest.approx(row['netPerYear'] / 12)
+    assert row['netRate'] == pytest.approx(row['netPerYear'] / 9000.0 * 100)
+
+
+def test_prepare_pmt_result_allowance_shelters_small_gain(portfolio_with_prices: Portfolio) -> None:
+    result = prepare_pmt_result(portfolio_with_prices, {}, _DATE, _TAX_RATE, 5.0, 30, allowance=10000.0)
+
+    row = result.iloc[0]
+    assert row['netPerYear'] == pytest.approx(row['grossPerYear'])
+
+
+def test_prepare_pmt_result_cash_only_is_untaxed(cash_only_portfolio: Portfolio) -> None:
+    result = prepare_pmt_result(cash_only_portfolio, {}, _DATE, _TAX_RATE, 5.0, 30)
+
+    row = result.iloc[0]
+    assert row['grossPerYear'] == pytest.approx(100000.0 * amortization_factor(0.05, 30))
+    assert row['netPerYear'] == pytest.approx(row['grossPerYear'])
+    assert row['netRate'] == pytest.approx(amortization_factor(0.05, 30) * 100)
+
+
+def test_prepare_pmt_result_zero_return_spreads_capital_evenly(cash_only_portfolio: Portfolio) -> None:
+    result = prepare_pmt_result(cash_only_portfolio, {}, _DATE, _TAX_RATE, 0.0, 25)
+
+    assert result.iloc[0]['grossPerYear'] == pytest.approx(100000.0 / 25)
+
+
+def test_prepare_pmt_result_empty_portfolio() -> None:
+    assert prepare_pmt_result(Portfolio(), {}, _DATE, _TAX_RATE, 5.0, 30).empty
+
+
+def test_prepare_pmt_result_missing_prices(portfolio_with_purchases: Portfolio) -> None:
+    with pytest.raises(InputError, match="No price data"):
+        prepare_pmt_result(portfolio_with_purchases, {}, _DATE, _TAX_RATE, 5.0, 30)
+
+
+def test_next_step_hint_subtracts_cash_from_sell_target() -> None:
+    assert '--target-net 800.00' in _next_step_hint(1000.0, 200.0)
+    assert 'cash balance of 200.00 first' in _next_step_hint(1000.0, 200.0)
+
+
+def test_next_step_hint_without_cash_targets_full_net() -> None:
+    assert '--target-net 1000.00' in _next_step_hint(1000.0, 0.0)
+    assert '--target-net 1000.00' in _next_step_hint(1000.0, -500.0)  # overdrafts are not added to the sell target
+
+
+def test_next_step_hint_cash_covers_withdrawal() -> None:
+    hint = _next_step_hint(1000.0, 1500.0)
+    assert 'no security sales are needed' in hint
+    assert '--target-net' not in hint
+
+
+def test_prepare_pmt_result_negative_cash_cancels_depot(portfolio_with_prices: Portfolio) -> None:
+    deposit_accounts, deposit_transactions = _deposit_account(-20000.0)
+    portfolio = Portfolio(
+        accounts=pd.concat([portfolio_with_prices.securities_accounts, deposit_accounts]),
+        transactions=pd.concat([portfolio_with_prices.securities_account_transactions, deposit_transactions]),
+        securities=portfolio_with_prices.securities,
+        prices=portfolio_with_prices.prices,
+    )
+
+    with pytest.raises(InputError, match="nothing left to withdraw"):
+        prepare_pmt_result(portfolio, {}, _DATE, _TAX_RATE, 5.0, 30)

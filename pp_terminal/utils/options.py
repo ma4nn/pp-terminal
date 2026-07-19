@@ -63,16 +63,3 @@ def exempt_rate_callback(ctx: typer.Context, param: typer.CallbackParam, value: 
         type=float,
         default=30
     ))
-
-
-def tax_csv_callback(ctx: typer.Context, param: typer.CallbackParam, value: str | None) -> str | None:  # pylint: disable=unused-argument
-    # 1. If provided via CLI, use it
-    if value is not None:
-        return value
-
-    # 2. Try config file
-    config_tax = ctx.obj.config.get('tax')
-    if config_tax is not None and 'file' in config_tax:
-        return str(config_tax['file'])
-
-    return None

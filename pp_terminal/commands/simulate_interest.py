@@ -112,9 +112,8 @@ def simulate_interest_rate(
     snapshot_end = PortfolioSnapshot(portfolio, datetime(year.year, 12, 31))
 
     df = calculate_interest(snapshot_begin, snapshot_end, interest_rate)
-    if df is not None:
-        df = df.rename(columns={'mean_balance': '⌀ Balance', 'interest': 'Simulated Interest', 'actual_interest': 'Actual Interest'})
-        df.insert(3, 'Interest Rate', f"{interest_rate}%")
+    df = df.rename(columns={'mean_balance': '⌀ Balance', 'interest': 'Simulated Interest', 'actual_interest': 'Actual Interest'})
+    df.insert(3, 'Interest Rate', f"{interest_rate}%")
 
     console.print(*output.result_table(
         df, TableOptions(title='Simulated Interest on Accounts', caption=f"for {year.strftime("%Y")}, excl. taxes", show_index=False, show_total=False, value_formatter=_format_value_wrapper)

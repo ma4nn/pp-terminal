@@ -35,7 +35,7 @@ from pp_terminal.domain.allocation import build_category_map
 from pp_terminal.exceptions import InputError
 from pp_terminal.utils.config import Config, get_exempt_rate, get_tax_files, get_allowance
 from pp_terminal.utils.helper import footer
-from pp_terminal.utils.options import tax_rate_callback, tax_csv_callback, allowance_callback
+from pp_terminal.utils.options import tax_rate_callback, allowance_callback
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
@@ -237,7 +237,7 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
         min_amount: Annotated[Money | None, typer.Option("--min-amount", help="Minimum gross size for any sell order; smaller holdings are consolidated within their class or left unsold (only with --preserve-allocation)", min=0.01)] = None,
         summary: Annotated[bool, typer.Option("--summary", help="Aggregate the FIFO lots into one row per security (an actionable sell plan)")] = False,
         allowance: Annotated[Money, typer.Option("--allowance", help="Sparerpauschbetrag still available this year; defaults to config (1000 EUR, use 2000 for joint assessment)", min=0, callback=allowance_callback)] = None,  # type: ignore
-        tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data", callback=tax_csv_callback)] = None
+        tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data")] = None
 ) -> None:
     """
     Simulate selling shares: calculate fees, taxes (Abgeltungssteuer + Soli), and net proceeds.

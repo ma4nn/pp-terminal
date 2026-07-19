@@ -19,6 +19,7 @@
 # pylint: disable=duplicate-code
 import logging
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
@@ -27,12 +28,23 @@ import pandas as pd
 import pytest
 import typer
 from _pytest.fixtures import TopRequest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from pp_terminal.commands.validate import run_validations
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import AccountType, TransactionType
 from pp_terminal.main import app
+
+_AMAZON_SECURITY_ID = '3cfa101b-0558-4ec4-a9e5-baab4eeddb2a'  # US0231351067 in kommer.ids.xml
+_EUROPE_ETF_SECURITY_ID = 'c770a389-0a84-442c-ad85-2a58c3066924'  # IE00B1YZSC51 in kommer.ids.xml
+
+# deemed income per share matching the base yields calculated from kommer.ids.xml
+_MATCHING_TAX_CSV = """isin;year;deemed_income
+US0231351067;2023;1.4994
+US0231351067;2024;2.4033779
+US0231351067;2025;3.9000962
+"""
 
 
 @pytest.fixture(name='sample_portfolio_with_limits')
@@ -93,6 +105,36 @@ def _make_ctx(portfolio: Portfolio, config: dict[str, Any]) -> Mock:
     ctx = Mock()
     ctx.obj = SimpleNamespace(portfolio=portfolio, config=config)
     return ctx
+
+
+def _with_account_attribute(portfolio: Portfolio, attr_uuid: str, values: dict[str, Any]) -> Portfolio:
+    """Return a new portfolio whose deposit accounts carry the given attribute column."""
+    accounts = portfolio.deposit_accounts.copy()
+    accounts[attr_uuid] = pd.Series(values)
+
+    return Portfolio(accounts=accounts, transactions=portfolio.deposit_account_transactions)
+
+
+def _write_paid_tax_config(tmp_path: Path, security_id: str, severity: str = 'error') -> Path:
+    csv_file = tmp_path / 'paid_taxes.csv'
+    csv_file.write_text(_MATCHING_TAX_CSV, encoding='utf-8')
+
+    config_file = tmp_path / 'config.toml'
+    config_file.write_text(
+        f'[tax]\nfiles = ["{csv_file}"]\n\n'
+        '[commands.validate.securities]\n'
+        f'rules = [{{type = "paid-tax-validation", severity = "{severity}", tolerance = 0.001, applies-to = ["{security_id}"]}}]\n',
+        encoding='utf-8'
+    )
+
+    return config_file
+
+
+def _invoke_paid_tax_validation(request: TopRequest, config_file: Path) -> Result:
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+
+    return runner.invoke(app, ['--file', str(xml_file), '--config', str(config_file), '--no-cache', 'validate', '--rule', 'paid-tax-validation'])
 
 
 def test_no_validation_config(sample_portfolio_with_limits: Portfolio) -> None:
@@ -196,11 +238,9 @@ def test_entity_specific_rule(sample_portfolio_with_limits: Portfolio) -> None:
 def test_attribute_based_rule(sample_portfolio_with_limits: Portfolio) -> None:
     """Test balance-limit-from-attribute rule type."""
     test_attr_uuid = 'test-attr-uuid-12345'
-    sample_portfolio_with_limits._accounts[test_attr_uuid] = pd.Series({  # pylint: disable=protected-access
-        'account-1': 1000.0,
-    })
+    portfolio = _with_account_attribute(sample_portfolio_with_limits, test_attr_uuid, {'account-1': 1000.0})
 
-    ctx = _make_ctx(sample_portfolio_with_limits, {'commands': {'validate': {'accounts': {'rules': [
+    ctx = _make_ctx(portfolio, {'commands': {'validate': {'accounts': {'rules': [
         {'type': 'balance-limit-from-attribute', 'value': test_attr_uuid}
     ]}}}})
 
@@ -255,11 +295,9 @@ def test_date_passed_with_friendly_name(sample_portfolio_with_limits: Portfolio,
     caplog.set_level(logging.ERROR)
 
     test_attr_uuid = 'test-date-attr-uuid-12345'
-    sample_portfolio_with_limits._accounts[test_attr_uuid] = pd.Series({  # pylint: disable=protected-access
-        'account-1': datetime(2020, 1, 1),
-    })
+    portfolio = _with_account_attribute(sample_portfolio_with_limits, test_attr_uuid, {'account-1': datetime(2020, 1, 1)})
 
-    ctx = _make_ctx(sample_portfolio_with_limits, {'commands': {'validate': {'accounts': {'rules': [
+    ctx = _make_ctx(portfolio, {'commands': {'validate': {'accounts': {'rules': [
         {'type': 'date-passed-from-attribute', 'value': test_attr_uuid}
     ]}}}})
 
@@ -269,3 +307,95 @@ def test_date_passed_with_friendly_name(sample_portfolio_with_limits: Portfolio,
     assert exc_info.value.exit_code == 1
     assert len(caplog.records) == 1
     assert 'date attribute has passed 2020-01-01' in caplog.text
+
+
+def test_cli_paid_tax_validation_within_tolerance(request: TopRequest, tmp_path: Path) -> None:
+    """Test that matching recorded taxes from the CSV produce no violation."""
+    config_file = _write_paid_tax_config(tmp_path, _AMAZON_SECURITY_ID)
+
+    result = _invoke_paid_tax_validation(request, config_file)
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+
+def test_cli_paid_tax_validation_reports_mismatch(request: TopRequest, tmp_path: Path, caplog: Any) -> None:
+    """Test that missing CSV entries for a held security are reported as an error."""
+    caplog.set_level(logging.ERROR)
+    config_file = _write_paid_tax_config(tmp_path, _EUROPE_ETF_SECURITY_ID)
+
+    result = _invoke_paid_tax_validation(request, config_file)
+
+    assert result.exit_code == 1
+    assert 'unexpected/missing paid tax values' in caplog.text
+    assert 'iShares Core MSCI Europe' in caplog.text
+
+
+def test_cli_paid_tax_validation_mismatch_with_warning_severity(request: TopRequest, tmp_path: Path, caplog: Any) -> None:
+    """Test that a mismatch with warning severity is reported but doesn't fail the command."""
+    caplog.set_level(logging.WARNING)
+    config_file = _write_paid_tax_config(tmp_path, _EUROPE_ETF_SECURITY_ID, severity='warning')
+
+    result = _invoke_paid_tax_validation(request, config_file)
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert 'unexpected/missing paid tax values' in caplog.text
+
+
+def _provide_portfolio_with_vap_liability(deposit_amount: float) -> tuple[Portfolio, int]:
+    """Create a portfolio holding fund shares with a price gain in the relevant VAP year."""
+    now = datetime.now()
+    vap_year = now.year if now.month == 12 else now.year - 1
+
+    accounts = pd.DataFrame([
+        ['Depot', AccountType.SECURITIES.value, 'giro-1', False, 'EUR'],
+        ['Girokonto', AccountType.DEPOSIT.value, None, False, 'EUR'],
+    ], columns=['name', 'type', 'referenceAccount', 'isRetired', 'currency'],
+       index=['depot-1', 'giro-1'])
+    accounts.index.name = 'accountId'
+
+    securities = pd.DataFrame([
+        ['Test Fund', 'XXX', 'ISIN123', None, False, 'EUR'],
+    ], columns=['name', 'wkn', 'isin', 'note', 'isRetired', 'currency'],
+       index=['sec-1'])
+    securities.index.name = 'securityId'
+
+    transactions = pd.DataFrame([
+        [datetime(vap_year - 1, 6, 15), 'depot-1', 'sec-1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        [datetime(vap_year - 1, 1, 10), 'giro-1', None, TransactionType.DEPOSIT.value, deposit_amount, 0.0, AccountType.DEPOSIT.value, 'EUR', 0.0, 0.0],
+    ], columns=['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees'])
+    transactions = transactions.set_index(['date', 'accountId', 'securityId'])
+
+    prices = pd.DataFrame([
+        [datetime(vap_year, 1, 1), 'sec-1', 100.0],
+        [datetime(vap_year, 12, 30), 'sec-1', 120.0],
+    ], columns=['date', 'securityId', 'price']).set_index(['date', 'securityId'])
+
+    return Portfolio(accounts=accounts, transactions=transactions, securities=securities, prices=prices), vap_year
+
+
+def test_vap_liquidity_insufficient_balance(caplog: Any) -> None:
+    """Test that a deposit account balance below the VAP liability is reported as an error."""
+    caplog.set_level(logging.ERROR)
+    portfolio, vap_year = _provide_portfolio_with_vap_liability(deposit_amount=1.0)
+
+    ctx = _make_ctx(portfolio, {'commands': {'validate': {'accounts': {'rules': [
+        {'type': 'vap-liquidity'}
+    ]}}}})
+
+    with pytest.raises(typer.Exit) as exc_info:
+        run_validations(ctx, rule=['vap-liquidity'])
+
+    assert exc_info.value.exit_code == 1
+    assert 'insufficient balance' in caplog.text
+    assert f'for {vap_year}' in caplog.text
+
+
+def test_vap_liquidity_sufficient_balance() -> None:
+    """Test that a deposit account balance covering the VAP liability passes."""
+    portfolio, _ = _provide_portfolio_with_vap_liability(deposit_amount=10000.0)
+
+    ctx = _make_ctx(portfolio, {'commands': {'validate': {'accounts': {'rules': [
+        {'type': 'vap-liquidity'}
+    ]}}}})
+
+    run_validations(ctx, rule=['vap-liquidity'])

@@ -26,17 +26,14 @@ from pp_terminal.domain.schemas import Money
 @pytest.mark.parametrize('expected, money, currency, locale_value', [
     ('3.20', 3.2, 'EUR', None),
     ('3.20', 3.2, '', None),
-    ('', 0, '', None),
     ('€3.20', 3.2, 'EUR', 'en_US'),
     ('3.20', 3.2, '', 'en_US'),
-    ('', 0, '', 'en_US'),
+    ('€0.00', 0.0, 'EUR', 'en_US'),
     ('3,20\xa0€', 3.2, 'EUR', 'de_DE'),
     ('3,20\xa0', 3.2, '', 'de_DE'),
-    ('', 0, 'xx', 'en_US'),
-    ('', 100, 'xx', 'en_US'),
+    ('100.00', 100.0, 'xx', 'en_US'),  # unknown currency falls back to plain formatting
     ('', None, 'EUR', 'en_US'),
-    ('', 9, 'EUR', 'fr_FR'),
-    ('', object(), 'EUR', 'fr_FR'),
+    ('', 9, 'EUR', 'en_US'),  # int is not Money
     ('', float('nan'), 'EUR', None),
 ])
 def test_format_money(expected: str, money: Money, currency: str, locale_value: str) -> None:

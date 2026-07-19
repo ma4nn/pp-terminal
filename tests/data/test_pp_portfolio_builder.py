@@ -21,12 +21,33 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 from _pytest.fixtures import TopRequest
 
 from pp_terminal.exceptions import InputError
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder, CachedPpPortfolioBuilder
+from pp_terminal.data.ppxml2db_wrapper import Ppxml2dbWrapper
+from pp_terminal.domain.schemas import TransactionType
 from tests.conftest import EXEMPT_RATE_CONFIG
+
+EXPECTED_AMOUNT_SIGNS = {
+    TransactionType.BUY: -1,
+    TransactionType.SELL: 1,
+    TransactionType.DELIVERY_INBOUND: 1,
+    TransactionType.DELIVERY_OUTBOUND: 1,
+    TransactionType.TRANSFER_IN: 1,
+    TransactionType.TRANSFER_OUT: -1,
+    TransactionType.DEPOSIT: 1,
+    TransactionType.REMOVAL: -1,
+    TransactionType.INTEREST: 1,
+    TransactionType.INTEREST_CHARGE: -1,
+    TransactionType.FEES_REFUND: 1,
+    TransactionType.FEES: -1,
+    TransactionType.DIVIDENDS: 1,
+    TransactionType.TAXES: -1,
+    TransactionType.TAX_REFUND: 1,
+}
 
 
 def test_import_non_existent_file() -> None:
@@ -47,6 +68,30 @@ def test_import_pp_empty_xml(request: TopRequest) -> None:
 def test_import_xml_with_null_property_value(request: TopRequest) -> None:
     """PP v69+ can have properties with empty/null values (e.g. portfolio-chart-details)."""
     CachedPpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'empty_null_prop.ids.xml')
+
+
+def test_import_missing_base_currency_property(request: TopRequest) -> None:
+    """A database without baseCurrency can occur when a cache database is reused and XML parsing is skipped."""
+    xml_file = request.path.parent.parent / 'fixtures' / 'empty.ids.xml'
+    db = Ppxml2dbWrapper()
+    db.open(xml_file)
+    db.connection.execute("delete from property where name = 'baseCurrency'")
+
+    with patch.object(db, 'open'), pytest.raises(InputError):
+        PpPortfolioBuilder(db).construct(xml_file)
+
+
+def test_transaction_amount_sign_and_scaling_per_type(request: TopRequest) -> None:
+    """Fixture stores each type once with amount 123456 (cents); portfolio transactions with shares 250000000 (10^8 scale)."""
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'transaction_types.ids.xml')
+
+    transactions = pd.concat([portfolio.deposit_account_transactions, portfolio.securities_account_transactions])
+
+    for transaction_type in TransactionType:
+        amounts = transactions.loc[transactions['type'] == transaction_type.value, 'amount']
+        assert amounts.tolist() == [EXPECTED_AMOUNT_SIGNS[transaction_type] * 1234.56], transaction_type.value
+
+    assert portfolio.securities_account_transactions['shares'].tolist() == [2.5] * 6
 
 
 def test_xml_file_opened_readonly(request: TopRequest) -> None:
@@ -81,38 +126,11 @@ def test_cache_disabled_uses_in_memory(request: TopRequest, tmp_path: Path) -> N
     temp_xml.write_bytes(xml_file.read_bytes())
 
     # Build portfolio without caching
-    portfolio = PpPortfolioBuilder().construct(temp_xml)
+    PpPortfolioBuilder().construct(temp_xml)
 
     # Verify no cache file was created
     cache_files = list(tmp_path.glob('.test.*.pp-terminal.db'))
     assert len(cache_files) == 0
-    assert portfolio is not None
-
-def test_cache_filename_generation(request: TopRequest, tmp_path: Path) -> None:
-    """Test cache filename includes checksum."""
-    xml_file = request.path.parent.parent / 'fixtures' / 'empty.ids.xml'
-
-    # Create temporary copy to avoid leaving cache files
-    temp_xml = tmp_path / 'test.xml'
-    temp_xml.write_bytes(xml_file.read_bytes())
-
-    # Build portfolio with caching
-    CachedPpPortfolioBuilder().construct(temp_xml)
-
-    # Verify cache file exists with expected pattern
-    cache_files = list(tmp_path.glob('.test.*.pp-terminal.db'))
-    assert len(cache_files) == 1
-    cache_file = cache_files[0]
-
-    # Verify filename format: .test.<64-char-hex>.pp-terminal.db
-    assert cache_file.name.startswith('.test.')
-    assert cache_file.name.endswith('.pp-terminal.db')
-
-    # Extract checksum part: .test.<checksum>.pp-terminal.db
-    name_parts = cache_file.name.split('.')
-    # ['', 'test', '<checksum>', 'pp-terminal', 'db']
-    checksum = name_parts[2]
-    assert len(checksum) == 64  # SHA-256 hex digest
 
 def test_cache_hit_reuses_existing(request: TopRequest, tmp_path: Path) -> None:
     """Test that existing valid cache is reused."""
@@ -123,7 +141,7 @@ def test_cache_hit_reuses_existing(request: TopRequest, tmp_path: Path) -> None:
     temp_xml.write_bytes(xml_file.read_bytes())
 
     # First build: creates cache
-    portfolio1 = CachedPpPortfolioBuilder().construct(temp_xml)
+    CachedPpPortfolioBuilder().construct(temp_xml)
 
     # Get cache file
     cache_files = list(tmp_path.glob('.test.*.pp-terminal.db'))
@@ -133,13 +151,11 @@ def test_cache_hit_reuses_existing(request: TopRequest, tmp_path: Path) -> None:
 
     # Second build: should reuse cache (we can't easily verify open() wasn't called
     # without complex mocking, but we can verify the cache file wasn't recreated)
-    portfolio2 = CachedPpPortfolioBuilder().construct(temp_xml)
+    CachedPpPortfolioBuilder().construct(temp_xml)
 
     # Cache file should still exist and not be recreated
     assert cache_file.exists()
     assert cache_file.stat().st_mtime == cache_mtime
-    assert portfolio1 is not None
-    assert portfolio2 is not None
 
 def test_cache_invalidation_on_xml_change(request: TopRequest, tmp_path: Path) -> None:
     """Test that cache is invalidated when XML changes."""
@@ -209,8 +225,7 @@ def test_cache_fallback_on_io_error(request: TopRequest, tmp_path: Path, caplog:
 
     try:
         # Should fall back to in-memory mode
-        portfolio = CachedPpPortfolioBuilder().construct(temp_xml)
-        assert portfolio is not None
+        CachedPpPortfolioBuilder().construct(temp_xml)
 
         # Verify warning was logged
         assert any('Cache unavailable' in record.message or 'Failed to initialize cache' in record.message

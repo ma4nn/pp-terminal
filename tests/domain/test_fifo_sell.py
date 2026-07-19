@@ -82,6 +82,19 @@ def test_fifo_lots_single_purchase(share_sell_portfolio: Portfolio) -> None:
     assert lots.iloc[0]['netProceeds'] == pytest.approx(4325.25)  # 4800 - 474.75
 
 
+def test_fractional_purchase_lot() -> None:
+    transactions = pd.DataFrame([
+        [datetime(2022, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, 50.0, 0.5, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],  # €100/share
+    ], columns=['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees']).set_index(['date', 'accountId', 'securityId'])
+
+    lots = calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 120.0, 26.375), shares_to_sell=0.5)
+
+    assert len(lots) == 1
+    assert lots.iloc[0]['shares'] == pytest.approx(0.5)
+    assert lots.iloc[0]['costBasis'] == pytest.approx(50.0)
+    assert lots.iloc[0]['capitalGain'] == pytest.approx(10.0)  # 0.5 * (120 - 100)
+
+
 def test_fifo_lots_multiple_purchases(share_sell_portfolio: Portfolio) -> None:
     """Test FIFO when selling shares across multiple purchases."""
     # Sell 120 shares: 50 from first purchase, 50 from second, 20 from third

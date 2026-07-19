@@ -28,7 +28,6 @@ import typer
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.output.column_utils import normalize_columns
 from pp_terminal.data.filters import clean_for_display, unstack_column_by_currency, pivot_taxonomy_columns, retired_row_labels
-from pp_terminal.exceptions import InputError
 from pp_terminal.utils.helper import footer
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
@@ -115,10 +114,7 @@ def prepare_accounts_df(
     if account_type == AccountType.SECURITIES or account_type is None:
         df2 = calculate_securities_accounts_sum(snapshot)
 
-    df = pd.concat([df1, df2]) if df1 is not None or df2 is not None else None
-
-    if df is None:
-        raise InputError('invalid account type')
+    df = pd.concat([df1, df2])
 
     validation_results = validate_accounts(portfolio, snapshot, config)
     account_ids = df.index.get_level_values('accountId')

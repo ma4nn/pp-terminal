@@ -27,7 +27,7 @@ import pytest
 from _pytest.fixtures import TopRequest
 from jsonschema import ValidationError as JsonSchemaValidationError
 
-from pp_terminal.utils.config import validated_toml_loader, get_command_config, get_allowance, _load_schema, _merged_schema
+from pp_terminal.utils.config import validated_toml_loader, get_command_config, get_allowance, get_tax_files, _load_schema, _merged_schema
 
 PLUGIN_SCHEMA = {'type': 'object', 'properties': {'years': {'type': 'integer'}}, 'additionalProperties': False}
 OTHER_PLUGIN_SCHEMA = {'type': 'object', 'properties': {'quota': {'type': 'number'}}, 'additionalProperties': False}
@@ -220,6 +220,19 @@ def test_should_return_configured_allowance(tmp_path: Path) -> None:
     result = validated_toml_loader(_write_config(tmp_path, '[tax]\nallowance = 2000\n'))
 
     assert get_allowance(result) == pytest.approx(2000.0)
+
+def test_should_return_single_tax_file_for_scalar_value(tmp_path: Path) -> None:
+    result = validated_toml_loader(_write_config(tmp_path, '[tax]\nfiles = "taxes.csv"\n'))
+
+    assert get_tax_files(result) == [Path('taxes.csv')]
+
+def test_should_return_tax_files_for_list_value(tmp_path: Path) -> None:
+    result = validated_toml_loader(_write_config(tmp_path, '[tax]\nfiles = ["a.csv", "b.csv"]\n'))
+
+    assert get_tax_files(result) == [Path('a.csv'), Path('b.csv')]
+
+def test_should_return_no_tax_files_when_not_configured() -> None:
+    assert get_tax_files({}) == []
 
 def test_should_reject_negative_allowance(tmp_path: Path) -> None:
     with pytest.raises(JsonSchemaValidationError, match=r'tax\.allowance'):

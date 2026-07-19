@@ -575,3 +575,36 @@ class TestAllocationPreservingStrategyPerOrderFloor:
         assert set(gross.index) == {'sec-1', 'sec-2'}       # marginal kept as a valid order, not dropped
         assert (gross >= 500.0 - 0.01).all()                # both orders clear the floor
         assert result['netProceeds'].sum() == pytest.approx(2000.0, abs=1.0)  # target still met exactly
+
+
+class TestAllocationPreservingStrategyUnsellableClass:
+    # Equity = sec-1 (big). Bonds = sec-2..4, each 300 gross: class total 900 but no holding clears a 500 floor.
+    CATEGORY_MAP = {'sec-1': 'Equity', 'sec-2': 'Bonds', 'sec-3': 'Bonds', 'sec-4': 'Bonds'}
+
+    def _enriched(self) -> DataFrame[TaxLotSellSchema]:
+        portfolio = _make_portfolio(
+            transactions_data=[
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 2700.0, 30.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 270.0, 3.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-3', TransactionType.BUY.value, 270.0, 3.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-4', TransactionType.BUY.value, 270.0, 3.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+            securities_data=[['ETF A', 'WKN1', 'EUR'], ['Bond B', 'WKN2', 'EUR'], ['Bond C', 'WKN3', 'EUR'], ['Bond D', 'WKN4', 'EUR']],
+        )
+        return _enrich_multi(portfolio, sell_price=100.0)
+
+    def test_class_with_no_floor_sized_holding_is_excluded_and_reported(self) -> None:
+        """A class whose total clears the floor but whose holdings are each below it must be excluded, not silently zeroed."""
+        strategy = AllocationPreservingStrategy(2000.0, self.CATEGORY_MAP, min_amount=500.0)  # feasible from Equity alone
+        result = finalize_sell_lots(strategy.select_lots(self._enriched()), TAX_RATE)
+
+        sold = result.reset_index()
+        assert set(sold['securityId'].map(self.CATEGORY_MAP)) == {'Equity'}  # Bonds could form no valid order
+        assert strategy.excluded_groups == ['Bonds']                        # ...and it is reported, not silent
+        assert result['netProceeds'].sum() == pytest.approx(2000.0, abs=1.0)
+
+    def test_unsellable_class_making_target_infeasible_raises(self) -> None:
+        """If dropping the unsellable class makes the target unreachable, surface a clear error instead of undershooting."""
+        # Equity nets ~2920; asking 3000 is impossible once Bonds (unsellable under the floor) is excluded
+        with pytest.raises(InputError, match="requires selling amounts below"):
+            AllocationPreservingStrategy(3000.0, self.CATEGORY_MAP, min_amount=500.0).select_lots(self._enriched())

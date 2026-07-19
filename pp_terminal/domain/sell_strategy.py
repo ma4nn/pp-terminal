@@ -186,11 +186,12 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
     When ``min_amount`` is set it acts as a per-order (per account/security) floor:
     within a group the quota is consolidated onto whole orders that each clear the
     floor, and a holding too small to ever form a valid order is left unsold (its
-    class quota is covered by larger siblings, so weights hold). A group whose entire
-    quota is below the floor cannot support even one order and is dropped altogether;
-    the remaining groups still absorb the full target net, so those small classes
-    drift slightly, and their names are exposed via ``excluded_groups`` after
-    ``select_lots`` so the caller can warn about them.
+    class quota is covered by larger siblings, so weights hold). A group is dropped
+    altogether when its whole quota is below the floor, or when none of its holdings
+    is large enough to fill even one order (so it could never contribute); the
+    remaining groups still absorb the full target net, so those small classes drift
+    slightly, and their names are exposed via ``excluded_groups`` after ``select_lots``
+    so the caller can warn about them.
     """
 
     def __init__(self, target_net: Money, category_by_security: dict[str, str] | None = None,
@@ -220,16 +221,23 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
         )
 
     def _resolve_included_groups(self, df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
-        """Drop groups too small to sell (quota < min_amount), redistributing to hit the target."""
+        """Drop groups too small to sell, redistributing to hit the target.
+
+        A group is dropped when its whole quota falls below one order, or when no single holding in it is large
+        enough to form a valid order (so it could never contribute under the per-order floor). Dropped groups are
+        reported via ``excluded_groups`` rather than silently left unsold.
+        """
         self.excluded_groups = []
         if not self.min_amount:
             return df, self._solve_fraction(df)
 
         group_gross = df.groupby('_group', sort=False)['grossProceeds'].sum()
-        included = list(group_gross.index)
+        order_gross = df.groupby(['_group', 'accountId', 'securityId'], sort=False)['grossProceeds'].sum()
+        largest_order = order_gross.groupby(level='_group', sort=False).max()
+        included, self.excluded_groups = self._partition_sellable_groups(group_gross.index, largest_order)
         while True:
             current = df[df['_group'].isin(included)]
-            if (current['shares'] * current['netProceedsPerShare']).sum() < self.target_net - 0.005:
+            if current.empty or (current['shares'] * current['netProceedsPerShare']).sum() < self.target_net - 0.005:
                 raise InputError(
                     f"Reaching a net of {self.target_net:.2f} requires selling amounts below the "
                     f"{self.min_amount:.2f} minimum; lower --target-net or the minimum"
@@ -241,6 +249,16 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
             smallest = min(below, key=lambda group: group_gross[group])
             included.remove(smallest)
             self.excluded_groups.append(str(smallest))
+
+    def _partition_sellable_groups(self, groups: pd.Index, largest_order: pd.Series) -> tuple[list[str], list[str]]:
+        included, excluded = [], []
+        for group in groups:
+            # a group whose biggest holding cannot fill one order can never contribute under the floor
+            if largest_order[group] < (self.min_amount or 0.0) - 0.005:
+                excluded.append(str(group))
+            else:
+                included.append(group)
+        return included, excluded
 
     def _solve_fraction(self, df: pd.DataFrame) -> float:
         low, high = 0.0, 1.0

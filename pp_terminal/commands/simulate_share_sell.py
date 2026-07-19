@@ -28,14 +28,14 @@ import typer
 from pandera.typing import DataFrame
 
 from pp_terminal.data.filters import filter_by_account_and_security, filter_by_security, filter_by_account
-from pp_terminal.domain.cost_basis import enrich_fifo_lots, finalize_sell_lots
+from pp_terminal.domain.cost_basis import enrich_fifo_lots, finalize_sell_lots, apply_allowance
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.sell_strategy import SellStrategy, FixedSharesStrategy, MinTaxStrategy, AllocationPreservingStrategy
 from pp_terminal.domain.allocation import build_category_map
 from pp_terminal.exceptions import InputError
-from pp_terminal.utils.config import Config, get_exempt_rate, get_tax_files
+from pp_terminal.utils.config import Config, get_exempt_rate, get_tax_files, get_allowance
 from pp_terminal.utils.helper import footer
-from pp_terminal.utils.options import tax_rate_callback, tax_csv_callback
+from pp_terminal.utils.options import tax_rate_callback, tax_csv_callback, allowance_callback
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
@@ -93,11 +93,14 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
         taxonomy: str | None = None,
         min_amount: Money | None = None,
         tax_csv_data: DataFrame[TaxPaidSchema] | None = None,
+        allowance: Money | None = None,
 ) -> pd.DataFrame:
     if taxonomy is not None and target_net is None:
         raise InputError("preserve-allocation requires a target net proceeds amount")
     if min_amount is not None and taxonomy is None:
         raise InputError("a minimum amount requires preserve-allocation (a taxonomy)")
+
+    effective_allowance = allowance if allowance is not None else get_allowance(config)
 
     snapshot = PortfolioSnapshot(portfolio, date)
     holdings = snapshot.shares
@@ -136,14 +139,14 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
     result = pd.concat(all_enriched)
 
     category_by_security = _resolve_categories(portfolio, taxonomy, holdings) if taxonomy else None
-    strategy = _build_strategy(shares, target_net, category_by_security, min_amount)
-    if strategy:
-        result = finalize_sell_lots(strategy.select_lots(result), tax_rate)
-        if isinstance(strategy, AllocationPreservingStrategy) and strategy.excluded_groups:
-            log.warning(
-                "Asset classes whose entire sale would fall below the %.2f minimum order were left unsold: %s",
-                min_amount, ', '.join(strategy.excluded_groups)
-            )
+    result, strategy = _select_and_apply_allowance(
+        result, shares, target_net, category_by_security, min_amount, effective_allowance, tax_rate
+    )
+    if isinstance(strategy, AllocationPreservingStrategy) and strategy.excluded_groups:
+        log.warning(
+            "Asset classes whose entire sale would fall below the %.2f minimum order were left unsold: %s",
+            min_amount, ', '.join(strategy.excluded_groups)
+        )
 
     result = result.reset_index()
     security_info = portfolio.securities.reindex(columns=['name', 'isin'])
@@ -157,6 +160,42 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
         columns, sort_keys = ['assetClass', *_RESULT_COLUMNS], ['assetClass', *sort_keys]
 
     return result.sort_values(sort_keys)[columns]
+
+
+def _select_and_apply_allowance(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        lots: pd.DataFrame,
+        shares: float | None,
+        target_net: Money | None,
+        category_by_security: dict[str, str] | None,
+        min_amount: Money | None,
+        allowance: Money,
+        tax_rate: Percent,
+) -> tuple[pd.DataFrame, SellStrategy | None]:
+    """Pick the lots to sell and offset the Sparerpauschbetrag.
+
+    Without a --target-net the allowance is simply applied to the selection. With one, the allowance lowers the
+    tax by only the taxable portion of the sale (not the full amount), so the pre-allowance target is solved by
+    fixed-point iteration until the post-allowance net lands on --target-net.
+    """
+    if target_net is None or allowance <= 0:
+        strategy = _build_strategy(shares, target_net, category_by_security, min_amount)
+        selected = finalize_sell_lots(strategy.select_lots(lots), tax_rate) if strategy else lots
+        return apply_allowance(selected, allowance, tax_rate), strategy
+
+    strategy_target = target_net
+    best_shortfall, best_result, best_strategy = float('inf'), lots, None
+    for _ in range(12):
+        strategy = _build_strategy(shares, strategy_target, category_by_security, min_amount)
+        if strategy is None:  # a --target-net always yields a strategy; guard keeps the types honest
+            break
+        relieved = apply_allowance(finalize_sell_lots(strategy.select_lots(lots), tax_rate), allowance, tax_rate)
+        shortfall = target_net - float(relieved['netProceeds'].sum())
+        if abs(shortfall) < best_shortfall:
+            best_shortfall, best_result, best_strategy = abs(shortfall), relieved, strategy
+        if abs(shortfall) <= 0.01:
+            break
+        strategy_target = max(0.01, strategy_target + shortfall)
+    return best_result, best_strategy
 
 
 def _resolve_categories(portfolio: Portfolio, taxonomy: str, holdings: pd.Series) -> dict[str, str]:
@@ -198,6 +237,7 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
         taxonomy: Annotated[str | None, typer.Option("--preserve-allocation", metavar="TAXONOMY", help="Preserve the current asset allocation while reaching --target-net, using this Portfolio Performance taxonomy's classes")] = None,
         min_amount: Annotated[Money | None, typer.Option("--min-amount", help="Minimum gross size for any sell order; smaller holdings are consolidated within their class or left unsold (only with --preserve-allocation)", min=0.01)] = None,
         summary: Annotated[bool, typer.Option("--summary", help="Aggregate the FIFO lots into one row per security (an actionable sell plan)")] = False,
+        allowance: Annotated[Money, typer.Option("--allowance", help="Sparerpauschbetrag still available this year; defaults to config (1000 EUR, use 2000 for joint assessment)", min=0, callback=allowance_callback)] = None,  # type: ignore
         tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data", callback=tax_csv_callback)] = None
 ) -> None:
     """
@@ -218,7 +258,7 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
 
     result = prepare_share_sell_df(
         portfolio, config, date, tax_rate,
-        security_id, account_id, shares, price, target_net, taxonomy, min_amount, tax_csv_data
+        security_id, account_id, shares, price, target_net, taxonomy, min_amount, tax_csv_data, allowance
     )
 
     if result.empty:
@@ -236,7 +276,8 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
         TableOptions(title=f"{title} on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=True)
     ))
 
-    console.print(output.warning('This simulation excludes Sparerpauschbetrag. Multi-currency totals not meaningful.'))
+    allowance_note = f'Applies your Sparerpauschbetrag of up to {allowance:.2f} against taxable gains. ' if allowance > 0 else ''
+    console.print(output.warning(f'{allowance_note}Multi-currency totals are not meaningful.'))
     console.print(output.text(footer()), style="dim")
 
 

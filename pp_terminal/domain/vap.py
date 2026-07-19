@@ -206,6 +206,27 @@ def calculate_vap(  # pylint: disable=too-many-locals,too-many-arguments,too-man
     return VapResultSchema.validate(result)
 
 
+def apply_allowance_to_vap(vap_result: DataFrame[VapResultSchema], allowance: Money, tax_rate: Percent) -> DataFrame[VapResultSchema]:
+    """Offset the summed Vorabpauschale tax with the annual Sparerpauschbetrag.
+
+    The allowance is a portfolio-level deduction on the taxable income (after Teilfreistellung), so it lowers
+    the total VAP tax by allowance*rate and is distributed proportionally across the per-account cells.
+    """
+    if allowance <= 0 or vap_result.empty:
+        return vap_result
+
+    account_columns = [col for col in vap_result.columns if col not in ['wkn', 'name', 'currency']]
+    total_tax = float(vap_result[account_columns].sum().sum())
+    if total_tax <= 0:
+        return vap_result
+
+    reduction = min(allowance * tax_rate / 100.0, total_tax)
+    factor = (total_tax - reduction) / total_tax
+    result = vap_result.copy()
+    result[account_columns] = result[account_columns] * factor
+    return VapResultSchema.validate(result)
+
+
 def calculate_vap_by_security(
         portfolio: Portfolio,
         year: int,

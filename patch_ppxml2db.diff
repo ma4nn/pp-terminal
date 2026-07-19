@@ -1,6 +1,5 @@
-Submodule ppxml2db contains modified content
 diff --git a/ppxml2db/ppxml2db.py b/ppxml2db/ppxml2db.py
-index f3cd053..9cf668c 100644
+index a069ed5..b3ce1c3 100644
 --- a/ppxml2db/ppxml2db.py
 +++ b/ppxml2db/ppxml2db.py
 @@ -9,8 +9,8 @@ import os.path
@@ -33,9 +32,9 @@ index f3cd053..9cf668c 100644
          self.refcache = {}
 +        self.skip_prices = skip_prices
  
-     def parse(self):
-         props = ["version", "baseCurrency"]
-@@ -487,7 +488,7 @@ class PortfolioPerformanceXML2DB:
+     def cur_uuid(self):
+         return self.container_stack[-1][1]
+@@ -432,7 +433,7 @@ class PortfolioPerformanceXML2DB:
                      self.id2uuid_map[self.cur_xmlid] = el.text
  
                  elif el.tag == "price":
@@ -44,19 +43,7 @@ index f3cd053..9cf668c 100644
                          self.handle_price(el)
                  elif el.tag == "latest":
                      self.handle_latest(el)
-@@ -554,7 +555,10 @@ class PortfolioPerformanceXML2DB:
-                         else:
-                             assert False, "Unexpected crossEntry class: " + parent.get("class")
- 
--                        assert self.uuid2ctr_map[uuid].startswith(what), self.uuid2ctr_map[uuid]
-+                        if what == "account":
-+                            assert self.is_account_tag(self.uuid2ctr_map[uuid]), self.uuid2ctr_map[uuid]
-+                        else:
-+                            assert self.uuid2ctr_map[uuid].startswith(what), self.uuid2ctr_map[uuid]
-                         self.handle_xact(what, uuid, el, 0)
-                 elif el.tag == "transactionFrom":
-                     if el.get("id"):
-@@ -606,7 +610,7 @@ class PortfolioPerformanceXML2DB:
+@@ -554,7 +555,7 @@ class PortfolioPerformanceXML2DB:
                      preserve = True
                  elif self.el_stack and self.el_stack[-1] == "watchlist" and el.tag == "securities":
                      preserve = True

@@ -69,7 +69,7 @@ def print_tax_table(  # pylint: disable=too-many-locals,too-many-arguments,too-m
         base_rate: Annotated[Percent, typer.Option(help="The base rate (Basiszinssatz)", min=-100, max=100, prompt="Base Rate (%)", prompt_required=True, default_factory=_get_base_rate_percent_by_year)],
         tax_rate: Annotated[Percent, typer.Option(help="Your personal tax rate", min=0, max=100, callback=tax_rate_callback)] = None,  # type: ignore
         exempt_rate: Annotated[Percent, typer.Option(help="Default exemption rate (Teilfreistellung), can be overwritten for each security.", min=0, max=100, callback=exempt_rate_callback)] = None,  # type: ignore
-        allowance: Annotated[Money, typer.Option("--allowance", help="Sparerpauschbetrag still available this year; defaults to config (1000 EUR, use 2000 for joint assessment)", min=0, callback=allowance_callback)] = None  # type: ignore
+        allowance: Annotated[Money, typer.Option("--allowance", help="Sparerpauschbetrag still available this year", min=0, callback=allowance_callback)] = None  # type: ignore
 ) -> None:
     """
     Show a detailed table with calculated German preliminary tax values ("Vorabpauschale"/VAP) for a specified year, per each security and account.

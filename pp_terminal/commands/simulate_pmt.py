@@ -31,16 +31,17 @@ from pandera.typing import DataFrame
 
 from pp_terminal.data.filters import filter_by_account_and_security
 from pp_terminal.data.tax import load_prepaid_tax_data
+from pp_terminal.domain.allocation import build_category_map
 from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots
-from pp_terminal.domain.portfolio import Portfolio
+from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import Money, Percent, TaxPaidSchema
 from pp_terminal.exceptions import InputError
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.output.table_decorator import TableOptions
-from pp_terminal.utils.config import Config, get_allowance, get_command_config, get_exempt_rate, get_tax_files
+from pp_terminal.utils.config import Config, get_allowance, get_command_config, get_exempt_rate, get_tax_files, get_taxonomy
 from pp_terminal.utils.helper import footer
-from pp_terminal.utils.options import tax_rate_callback, tax_csv_callback, allowance_callback
+from pp_terminal.utils.options import tax_rate_callback, allowance_callback
 
 app = typer.Typer()
 console = Console()
@@ -63,6 +64,76 @@ def _horizon_years(date: datetime, end_date: datetime) -> float:
     if years <= 0:
         raise InputError("The end date must be after the snapshot date")
     return years
+
+
+def _security_categories(portfolio: Portfolio, values: pd.Series, taxonomy: str) -> pd.Index:
+    category_by_security, multi_category = build_category_map(portfolio.taxonomy_assignments, taxonomy)
+    if multi_category:
+        log.warning(
+            "Securities span multiple categories in '%s'; using the dominant one: %s",
+            taxonomy, _security_names(portfolio, multi_category)
+        )
+
+    categories = values.index.map(category_by_security)
+    unmapped = [str(sid) for sid in values.index[categories.isna()]]
+    if unmapped:
+        log.warning(
+            "Securities are not classified in '%s' and contribute a 0%% return: %s",
+            taxonomy, _security_names(portfolio, unmapped)
+        )
+
+    return categories
+
+
+def _security_names(portfolio: Portfolio, security_ids: list[str]) -> str:
+    return ', '.join(sorted(get_security_by_id(portfolio, sid).name for sid in security_ids))
+
+
+def _account_names(portfolio: Portfolio, account_ids: list[str]) -> str:
+    names = portfolio.deposit_accounts['name']
+    return ', '.join(sorted(str(names.get(account_id, account_id)) for account_id in account_ids))
+
+
+def _account_categories(portfolio: Portfolio, balances: pd.Series, taxonomy: str) -> pd.Index:
+    category_by_account, multi_category = build_category_map(portfolio.taxonomy_assignments, taxonomy, item_type='account')
+    if multi_category:
+        log.warning(
+            "Accounts span multiple categories in '%s'; using the dominant one: %s",
+            taxonomy, _account_names(portfolio, multi_category)
+        )
+
+    categories = balances.index.map(category_by_account)
+    unmapped = [str(account_id) for account_id in balances.index[categories.isna()]]
+    if unmapped:
+        log.warning(
+            "Deposit accounts are not classified in '%s' and contribute a 0%% return: %s",
+            taxonomy, _account_names(portfolio, unmapped)
+        )
+
+    return categories
+
+
+def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonomy: str, returns_by_class: dict[str, float]) -> Percent:
+    """Weighted average of the configured per-class real returns over the taxonomy's current allocation,
+    covering both securities and deposit accounts; unclassified items weigh in at 0%."""
+    snapshot = PortfolioSnapshot(portfolio, date)
+    security_values = snapshot.values.groupby('securityId').sum()
+    account_values = snapshot.balances.groupby('accountId').sum()
+
+    total = security_values.sum() + account_values.sum()
+    if total <= 0:
+        raise InputError("The portfolio has no positive value to derive a return from")
+
+    class_values = pd.concat([
+        security_values.groupby(_security_categories(portfolio, security_values, taxonomy)).sum(),
+        account_values.groupby(_account_categories(portfolio, account_values, taxonomy)).sum(),
+    ]).groupby(level=0).sum()
+    class_returns = pd.Series({str(category): returns_by_class.get(str(category)) for category in class_values.index}, dtype='float64')
+    missing = sorted(class_returns[class_returns.isna()].index)
+    if missing:
+        log.warning("No return configured for taxonomy classes, assuming 0%%: %s", ', '.join(missing))
+
+    return Percent(float((class_values * class_returns.fillna(0.0)).sum() / total))
 
 
 def _taxable_position(
@@ -150,12 +221,12 @@ def _next_step_hint(net: Money | None, cash: Money) -> str:
 @app.command(name="pmt")
 def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         ctx: typer.Context,
-        assumed_returns: Annotated[list[Percent] | None, typer.Option("--return", min=0, max=100, help="Assumed annual real return in percent; repeat the option to compare several rates (defaults to config)")] = None,
+        assumed_returns: Annotated[list[Percent] | None, typer.Option("--return", min=0, max=100, help="Expected annual real return in percent; repeat the option to compare several rates (defaults to config)")] = None,
         end_date: Annotated[datetime | None, typer.Option("--end-date", formats=["%Y-%m-%d"], help="Date by which the capital should be depleted (defaults to config)")] = None,
         date: Annotated[datetime | None, typer.Option(formats=["%Y-%m-%d"], help="Snapshot date (defaults to today)")] = None,
         tax_rate: Annotated[Percent, typer.Option(help="Your personal tax rate", min=0, max=100, callback=tax_rate_callback)] = None,  # type: ignore
-        allowance: Annotated[Money, typer.Option("--allowance", help="Sparerpauschbetrag still available this year; defaults to config (1000 EUR, use 2000 for joint assessment)", min=0, callback=allowance_callback)] = None,  # type: ignore
-        tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data", callback=tax_csv_callback)] = None
+        allowance: Annotated[Money, typer.Option("--allowance", help="Sparerpauschbetrag still available this year", min=0, callback=allowance_callback)] = None,  # type: ignore
+        tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data")] = None
 ) -> None:
     """
     Simulate an amortization withdrawal (annuity, "ARVA"): the net amount to spend this year so that
@@ -165,18 +236,23 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
 
+    if date is None:
+        date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
     if not assumed_returns:
         assumed_returns = [Percent(value) for value in get_command_config(config, 'simulate.pmt.returns', [])]
     if not assumed_returns:
-        assumed_returns = [Percent(typer.prompt("Assumed Annual Real Return (%)", type=click.FloatRange(0, 100)))]
+        taxonomy = get_taxonomy(config)
+        returns_by_class = get_command_config(config, 'simulate.pmt.returns-by-class')
+        if taxonomy and returns_by_class:
+            assumed_returns = [blended_return_from_allocation(portfolio, date, taxonomy, returns_by_class)]
+    if not assumed_returns:
+        assumed_returns = [Percent(typer.prompt("Expected Annual Real Return (%)", type=click.FloatRange(0, 100)))]
     if end_date is None:
         config_end_date = get_command_config(config, 'simulate.pmt.end-date')
         end_date = datetime.fromisoformat(config_end_date) if config_end_date else None
     if end_date is None:
         end_date = typer.prompt("End Date", type=click.DateTime(formats=["%Y-%m-%d"]))
-
-    if date is None:
-        date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     tax_files = [tax_csv] if tax_csv else get_tax_files(config)
     tax_csv_data = load_prepaid_tax_data(tax_files, portfolio)

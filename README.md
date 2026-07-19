@@ -103,6 +103,17 @@ returns = [2, 4, 6]  # assumed annual real returns in percent, one result row ea
 end-date = "2055-12-31"  # date by which the capital should be depleted
 ```
 
+Instead of fixed `returns`, the assumed return can be derived from the current asset allocation as the
+value-weighted average of per-class expected real returns. Securities and deposit accounts assigned to a
+class in the taxonomy use that class's return; unclassified ones weigh in at 0%:
+```toml
+taxonomy = "Anlagekategorien"  # global: the Portfolio Performance taxonomy that represents the asset allocation
+
+[commands.simulate.pmt]
+end-date = "2055-12-31"
+returns-by-class = { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }  # expected real return in percent per class
+```
+
 ### Validate Data
 
 | Command    | Description                                      |

@@ -22,10 +22,10 @@ import pandas as pd
 from pp_terminal.exceptions import InputError
 
 
-def build_category_map(taxonomy_assignments: pd.DataFrame, taxonomy_name: str) -> tuple[dict[str, str], list[str]]:
-    """Map each security to its category in the given taxonomy.
+def build_category_map(taxonomy_assignments: pd.DataFrame, taxonomy_name: str, item_type: str = 'security') -> tuple[dict[str, str], list[str]]:
+    """Map each item of the given type (security or account) to its category in the given taxonomy.
 
-    Securities assigned to several categories are mapped to their highest-weight
+    Items assigned to several categories are mapped to their highest-weight
     (dominant) category; their ids are returned separately so the caller can warn
     about possible allocation drift.
     """
@@ -38,17 +38,17 @@ def build_category_map(taxonomy_assignments: pd.DataFrame, taxonomy_name: str) -
 
     assignments = taxonomy_assignments[
         (taxonomy_assignments['taxonomyName'] == taxonomy_name)
-        & (taxonomy_assignments['itemType'] == 'security')
+        & (taxonomy_assignments['itemType'] == item_type)
     ]
 
-    category_by_security: dict[str, str] = {}
-    multi_category_securities: list[str] = []
-    for security_id, group in assignments.groupby('itemId'):
+    category_by_item: dict[str, str] = {}
+    multi_category_items: list[str] = []
+    for item_id, group in assignments.groupby('itemId'):
         if len(group) > 1:
-            multi_category_securities.append(str(security_id))
+            multi_category_items.append(str(item_id))
             dominant = group.loc[group['weight'].idxmax()]
-            category_by_security[str(security_id)] = str(dominant['categoryName'])
+            category_by_item[str(item_id)] = str(dominant['categoryName'])
         else:
-            category_by_security[str(security_id)] = str(group.iloc[0]['categoryName'])
+            category_by_item[str(item_id)] = str(group.iloc[0]['categoryName'])
 
-    return category_by_security, multi_category_securities
+    return category_by_item, multi_category_items

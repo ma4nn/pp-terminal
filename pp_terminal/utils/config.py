@@ -55,6 +55,11 @@ def get_allowance(config: Config) -> float:
     return float(config.get('tax', {}).get('allowance', 1000.0))
 
 
+def get_taxonomy(config: Config) -> str | None:
+    value = config.get('taxonomy')
+    return str(value) if value is not None else None
+
+
 def get_exempt_rate_attribute(config: Config) -> str | None:
     value = config.get('tax', {}).get('exemption-rate-attribute')
     return str(value) if value is not None else None
@@ -128,7 +133,11 @@ def _merged_schema() -> dict[str, Any]:
             log.error("failed to load config schema fragment %s, ignoring: %s", entry_point.name, e)
             continue
 
-        _mount_schema_fragment(commands_schema, entry_point.name, copy.deepcopy(fragment), group_nodes)
+        try:
+            _mount_schema_fragment(commands_schema, entry_point.name, copy.deepcopy(fragment), group_nodes)
+        except RuntimeError as e:
+            # a faulty or colliding plugin must never break every command
+            log.error("failed to mount config schema fragment %s, ignoring: %s", entry_point.name, e)
 
     return schema
 

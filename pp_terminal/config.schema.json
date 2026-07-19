@@ -14,6 +14,10 @@
       "type": "integer",
       "minimum": 0
     },
+    "taxonomy": {
+      "description": "Name of the Portfolio Performance taxonomy that represents the asset allocation",
+      "type": "string"
+    },
     "anonymize": {
       "description": "Anonymization configuration, this section enables anonymization.",
       "type": "object",
@@ -110,6 +114,16 @@
                   "description": "Date by which the capital should be depleted (YYYY-MM-DD)",
                   "type": "string",
                   "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "returns-by-class": {
+                  "description": "Expected annual real return in percent per class of the global \"taxonomy\", used to derive the assumed return from the current allocation when \"returns\" is not set",
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  }
                 }
               },
               "additionalProperties": false

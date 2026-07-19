@@ -22,7 +22,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
-from pp_terminal.commands.simulate_pmt import amortization_factor, prepare_pmt_result, _next_step_hint
+from pp_terminal.commands.simulate_pmt import amortization_factor, blended_return_from_allocation, prepare_pmt_result, _next_step_hint
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import AccountType, TransactionType
 from pp_terminal.exceptions import InputError
@@ -171,6 +171,49 @@ def test_next_step_hint_multiple_rates_uses_placeholder() -> None:
     hint = _next_step_hint(None, 200.0)
     assert 'Pick a row' in hint
     assert '--target-net <netPerYear>' in hint
+
+
+def _with_cash_and_taxonomy(portfolio: Portfolio, cash: float, assignment_rows: list[list[object]]) -> Portfolio:
+    deposit_accounts, deposit_transactions = _deposit_account(cash)
+    assignments = pd.DataFrame(assignment_rows, columns=['taxonomyName', 'itemId', 'itemType', 'categoryName', 'weight'])
+    return Portfolio(
+        accounts=pd.concat([portfolio.securities_accounts, deposit_accounts]),
+        transactions=pd.concat([portfolio.securities_account_transactions, deposit_transactions]),
+        securities=portfolio.securities,
+        prices=portfolio.prices,
+        taxonomy_assignments=assignments,
+    )
+
+
+def test_blended_return_weights_allocation_and_dilutes_unclassified_cash(portfolio_with_prices: Portfolio) -> None:
+    portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [['AA', 'sec-1', 'security', 'Equity', 10000]])
+
+    blended = blended_return_from_allocation(portfolio, _DATE, 'AA', {'Equity': 5.0})
+
+    assert blended == pytest.approx(9000.0 * 5.0 / 10000.0)  # 9000 securities at 5%, 1000 unclassified cash at 0%
+
+
+def test_blended_return_uses_class_of_assigned_cash_account(portfolio_with_prices: Portfolio) -> None:
+    portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [
+        ['AA', 'sec-1', 'security', 'Equity', 10000],
+        ['AA', 'dep-1', 'account', 'Cash', 10000],
+    ])
+
+    blended = blended_return_from_allocation(portfolio, _DATE, 'AA', {'Equity': 5.0, 'Cash': 1.0})
+
+    assert blended == pytest.approx((9000.0 * 5.0 + 1000.0 * 1.0) / 10000.0)
+
+
+def test_blended_return_unclassified_security_contributes_zero(portfolio_with_prices: Portfolio) -> None:
+    portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [['AA', 'sec-other', 'security', 'Equity', 10000]])
+
+    assert blended_return_from_allocation(portfolio, _DATE, 'AA', {'Equity': 5.0}) == pytest.approx(0.0)
+
+
+def test_blended_return_unconfigured_class_contributes_zero(portfolio_with_prices: Portfolio) -> None:
+    portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [['AA', 'sec-1', 'security', 'Equity', 10000]])
+
+    assert blended_return_from_allocation(portfolio, _DATE, 'AA', {'Bonds': 2.0}) == pytest.approx(0.0)
 
 
 def test_prepare_pmt_result_negative_cash_cancels_depot(portfolio_with_prices: Portfolio) -> None:

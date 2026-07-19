@@ -373,6 +373,33 @@ def test_pmt_reads_defaults_from_config(request: TopRequest, tmp_path: Path) -> 
     assert [row['assumedReturn'] for row in json.loads(result.output)] == [3.0, 6.0]
 
 
+def test_pmt_derives_return_from_allocation(request: TopRequest, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+    config_file = tmp_path / 'config.toml'
+    config_file.write_text(
+        'taxonomy = "Anlagekategorien"\n'
+        '[commands.simulate.pmt]\n'
+        'end-date = "2051-01-01"\n'
+        'returns-by-class = { "Eigenkapital" = 5.0, "Fremdkapital" = 2.0, "Rohstoffe" = 3.0, "Barvermögen" = 0.0 }\n',
+        encoding='utf-8'
+    )
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(config_file),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'pmt',
+        '--tax-rate', '26.375',
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    rows = json.loads(result.output)
+    assert len(rows) == 1
+    assert 0 < rows[0]['assumedReturn'] < 5.0  # blended from the allocation, diluted by cash and lower-return classes
+
+
 def test_anonymize_warns_and_keeps_output_clean(request: TopRequest, caplog: pytest.LogCaptureFixture) -> None:
     runner = CliRunner()
     fixtures_dir = request.path.parent.parent / 'fixtures'

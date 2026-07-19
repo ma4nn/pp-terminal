@@ -158,11 +158,26 @@ def test_should_mount_fragment_into_core_group(monkeypatch: pytest.MonkeyPatch, 
     assert get_command_config(result, 'view.myreport.years') == 1
     assert get_command_config(result, 'view.accounts.fields') == ['Name']
 
-def test_should_fail_when_fragment_collides_with_core_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_should_skip_fragment_colliding_with_core_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A plugin claiming a core-owned section must be ignored, not break every command."""
     _install_fragments(monkeypatch, {'view.accounts': 'tests.utils.test_config:PLUGIN_SCHEMA'})
 
-    with pytest.raises(RuntimeError, match=r'commands\.view\.accounts'):
-        validated_toml_loader(_write_config(tmp_path, 'precision = 4\n'))
+    with caplog.at_level(logging.ERROR):
+        result = validated_toml_loader(_write_config(tmp_path, 'precision = 4\n[commands.view.accounts]\nfields = ["Name"]\n'))
+
+    assert 'commands.view.accounts' in caplog.text
+    assert get_command_config(result, 'view.accounts.fields') == ['Name']  # the core section stays authoritative
+
+
+def test_should_skip_fragment_colliding_with_core_simulate_group(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Regression: a plugin fragment named exactly 'simulate' collides with the core group since simulate pmt got config support."""
+    _install_fragments(monkeypatch, {'simulate': 'tests.utils.test_config:PLUGIN_SCHEMA'})
+
+    with caplog.at_level(logging.ERROR):
+        result = validated_toml_loader(_write_config(tmp_path, 'precision = 4\n'))
+
+    assert 'commands.simulate' in caplog.text
+    assert result.get('precision') == 4
 
 def test_should_skip_broken_schema_fragments(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     _install_fragments(monkeypatch, {
@@ -182,17 +197,18 @@ def test_should_skip_broken_schema_fragments(monkeypatch: pytest.MonkeyPatch, tm
     assert 'simulate.invalid-schema' in caplog.text
     assert 'simulate.with-ref' in caplog.text
 
-def test_should_reject_mounting_inside_another_plugins_section(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A mount path nested inside an earlier fragment is a name conflict, and the fragment constant must stay pristine."""
+def test_should_skip_mounting_inside_another_plugins_section(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """A mount path nested inside an earlier fragment is a name conflict and is skipped; the fragment constant must stay pristine."""
     _install_fragments(monkeypatch, {
         'custom': 'tests.utils.test_config:PLUGIN_SCHEMA',
         'custom.foo': 'tests.utils.test_config:OTHER_PLUGIN_SCHEMA',
     })
     pristine = json.dumps(PLUGIN_SCHEMA, sort_keys=True)
 
-    with pytest.raises(RuntimeError, match=r'commands\.custom\.foo'):
+    with caplog.at_level(logging.ERROR):
         _merged_schema()
 
+    assert 'commands.custom.foo' in caplog.text
     assert json.dumps(PLUGIN_SCHEMA, sort_keys=True) == pristine
 
 def test_should_skip_fragment_with_too_deep_command_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

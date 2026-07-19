@@ -88,6 +88,35 @@
       "description": "Command-specific configuration",
       "type": "object",
       "properties": {
+        "simulate": {
+          "description": "Configuration for simulate commands",
+          "type": "object",
+          "properties": {
+            "pmt": {
+              "description": "Defaults for the simulate pmt command",
+              "type": "object",
+              "properties": {
+                "returns": {
+                  "description": "Assumed annual real returns in percent, one result row each",
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "minItems": 1
+                },
+                "end-date": {
+                  "description": "Date by which the capital should be depleted (YYYY-MM-DD)",
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "validate": {
           "description": "Validation rules for portfolio data",
           "type": "object",

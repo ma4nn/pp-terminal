@@ -29,6 +29,8 @@ from pp_terminal.exceptions import InputError
 
 
 _DATE = datetime(2025, 1, 1)
+_END_DATE = datetime(2055, 1, 1)
+_HORIZON_YEARS = (_END_DATE - _DATE).days / 365.25
 _TAX_RATE = 26.375
 
 
@@ -77,6 +79,11 @@ def test_amortization_factor_known_annuity_value() -> None:
     assert amortization_factor(0.05, 30) == pytest.approx(0.0619537, abs=1e-6)
 
 
+def test_amortization_factor_final_year_withdraws_everything() -> None:
+    assert amortization_factor(0.05, 0.5) == 1.0
+    assert amortization_factor(0.0, 1.0) == 1.0
+
+
 @pytest.mark.parametrize('rate', [0.0, 0.02, 0.05, 0.08])
 def test_amortization_factor_depletes_capital_exactly(rate: float) -> None:
     years, balance = 30, 100000.0
@@ -87,10 +94,10 @@ def test_amortization_factor_depletes_capital_exactly(rate: float) -> None:
 
 
 def test_prepare_pmt_result_taxes_the_drawn_gain(portfolio_with_prices: Portfolio) -> None:
-    result = prepare_pmt_result(portfolio_with_prices, {}, _DATE, _TAX_RATE, 5.0, 30, allowance=0.0)
+    result = prepare_pmt_result(portfolio_with_prices, {}, _DATE, _TAX_RATE, [5.0], _END_DATE, allowance=0.0)
 
     row = result.iloc[0]
-    gross = 9000.0 * amortization_factor(0.05, 30)
+    gross = 9000.0 * amortization_factor(0.05, _HORIZON_YEARS)
     gain_per_euro = 4500.0 * (1 - 0.30) / 9000.0  # default 30% Teilfreistellung
     expected_tax = gross * gain_per_euro * _TAX_RATE / 100
 
@@ -102,34 +109,51 @@ def test_prepare_pmt_result_taxes_the_drawn_gain(portfolio_with_prices: Portfoli
 
 
 def test_prepare_pmt_result_allowance_shelters_small_gain(portfolio_with_prices: Portfolio) -> None:
-    result = prepare_pmt_result(portfolio_with_prices, {}, _DATE, _TAX_RATE, 5.0, 30, allowance=10000.0)
+    result = prepare_pmt_result(portfolio_with_prices, {}, _DATE, _TAX_RATE, [5.0], _END_DATE, allowance=10000.0)
 
     row = result.iloc[0]
     assert row['netPerYear'] == pytest.approx(row['grossPerYear'])
 
 
 def test_prepare_pmt_result_cash_only_is_untaxed(cash_only_portfolio: Portfolio) -> None:
-    result = prepare_pmt_result(cash_only_portfolio, {}, _DATE, _TAX_RATE, 5.0, 30)
+    result = prepare_pmt_result(cash_only_portfolio, {}, _DATE, _TAX_RATE, [5.0], _END_DATE)
 
     row = result.iloc[0]
-    assert row['grossPerYear'] == pytest.approx(100000.0 * amortization_factor(0.05, 30))
+    assert row['grossPerYear'] == pytest.approx(100000.0 * amortization_factor(0.05, _HORIZON_YEARS))
     assert row['netPerYear'] == pytest.approx(row['grossPerYear'])
-    assert row['netRate'] == pytest.approx(amortization_factor(0.05, 30) * 100)
+    assert row['netRate'] == pytest.approx(amortization_factor(0.05, _HORIZON_YEARS) * 100)
 
 
 def test_prepare_pmt_result_zero_return_spreads_capital_evenly(cash_only_portfolio: Portfolio) -> None:
-    result = prepare_pmt_result(cash_only_portfolio, {}, _DATE, _TAX_RATE, 0.0, 25)
+    result = prepare_pmt_result(cash_only_portfolio, {}, _DATE, _TAX_RATE, [0.0], _END_DATE)
 
-    assert result.iloc[0]['grossPerYear'] == pytest.approx(100000.0 / 25)
+    assert result.iloc[0]['grossPerYear'] == pytest.approx(100000.0 / _HORIZON_YEARS)
+
+
+def test_prepare_pmt_result_one_row_per_return_rate(cash_only_portfolio: Portfolio) -> None:
+    result = prepare_pmt_result(cash_only_portfolio, {}, _DATE, _TAX_RATE, [2.0, 5.0, 0.0], _END_DATE)
+
+    assert list(result['assumedReturn']) == [2.0, 5.0, 0.0]  # given order is kept
+    for _, row in result.iterrows():
+        assert row['grossPerYear'] == pytest.approx(100000.0 * amortization_factor(row['assumedReturn'] / 100, _HORIZON_YEARS))
 
 
 def test_prepare_pmt_result_empty_portfolio() -> None:
-    assert prepare_pmt_result(Portfolio(), {}, _DATE, _TAX_RATE, 5.0, 30).empty
+    assert prepare_pmt_result(Portfolio(), {}, _DATE, _TAX_RATE, [5.0], _END_DATE).empty
+
+
+def test_prepare_pmt_result_no_rates() -> None:
+    assert prepare_pmt_result(Portfolio(), {}, _DATE, _TAX_RATE, [], _END_DATE).empty
 
 
 def test_prepare_pmt_result_missing_prices(portfolio_with_purchases: Portfolio) -> None:
     with pytest.raises(InputError, match="No price data"):
-        prepare_pmt_result(portfolio_with_purchases, {}, _DATE, _TAX_RATE, 5.0, 30)
+        prepare_pmt_result(portfolio_with_purchases, {}, _DATE, _TAX_RATE, [5.0], _END_DATE)
+
+
+def test_prepare_pmt_result_end_date_must_be_in_the_future(cash_only_portfolio: Portfolio) -> None:
+    with pytest.raises(InputError, match="end date must be after"):
+        prepare_pmt_result(cash_only_portfolio, {}, _DATE, _TAX_RATE, [5.0], datetime(2024, 1, 1))
 
 
 def test_next_step_hint_targets_full_net_and_mentions_cash_reserve() -> None:
@@ -143,6 +167,12 @@ def test_next_step_hint_without_cash_omits_cash_mention() -> None:
     assert 'cash balance' not in _next_step_hint(1000.0, -500.0)
 
 
+def test_next_step_hint_multiple_rates_uses_placeholder() -> None:
+    hint = _next_step_hint(None, 200.0)
+    assert 'Pick a row' in hint
+    assert '--target-net <netPerYear>' in hint
+
+
 def test_prepare_pmt_result_negative_cash_cancels_depot(portfolio_with_prices: Portfolio) -> None:
     deposit_accounts, deposit_transactions = _deposit_account(-20000.0)
     portfolio = Portfolio(
@@ -153,4 +183,4 @@ def test_prepare_pmt_result_negative_cash_cancels_depot(portfolio_with_prices: P
     )
 
     with pytest.raises(InputError, match="nothing left to withdraw"):
-        prepare_pmt_result(portfolio, {}, _DATE, _TAX_RATE, 5.0, 30)
+        prepare_pmt_result(portfolio, {}, _DATE, _TAX_RATE, [5.0], _END_DATE)

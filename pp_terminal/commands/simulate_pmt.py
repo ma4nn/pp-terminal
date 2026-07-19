@@ -19,10 +19,12 @@
 
 from datetime import datetime
 import logging
+import math
 from pathlib import Path
 from typing import cast
 from typing_extensions import Annotated
 
+import click
 import pandas as pd
 import typer
 from pandera.typing import DataFrame
@@ -36,7 +38,7 @@ from pp_terminal.domain.schemas import Money, Percent, TaxPaidSchema
 from pp_terminal.exceptions import InputError
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.output.table_decorator import TableOptions
-from pp_terminal.utils.config import Config, get_allowance, get_exempt_rate, get_tax_files
+from pp_terminal.utils.config import Config, get_allowance, get_command_config, get_exempt_rate, get_tax_files
 from pp_terminal.utils.helper import footer
 from pp_terminal.utils.options import tax_rate_callback, tax_csv_callback, allowance_callback
 
@@ -47,11 +49,20 @@ log = logging.getLogger(__name__)
 _RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'netPerYear', 'netPerMonth', 'netRate']
 
 
-def amortization_factor(rate: float, years: int) -> float:
+def amortization_factor(rate: float, years: float) -> float:
     """Annuity-due factor: the capital fraction to withdraw at the start of each year so it hits zero after `years` years at return `rate`."""
+    if years <= 1:  # less than one withdrawal period left: take out everything
+        return 1.0
     if rate == 0:
         return 1 / years
-    return rate / (1 - (1 + rate) ** -years) / (1 + rate)
+    return rate / (1 - math.pow(1 + rate, -years)) / (1 + rate)
+
+
+def _horizon_years(date: datetime, end_date: datetime) -> float:
+    years = (end_date - date).days / 365.25
+    if years <= 0:
+        raise InputError("The end date must be after the snapshot date")
+    return years
 
 
 def _taxable_position(
@@ -87,11 +98,15 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
         config: Config,
         date: datetime,
         tax_rate: Percent,
-        assumed_return: Percent,
-        years: int,
+        assumed_returns: list[Percent],
+        end_date: datetime,
         tax_csv_data: DataFrame[TaxPaidSchema] | None = None,
         allowance: Money | None = None,
 ) -> pd.DataFrame:
+    if not assumed_returns:
+        return pd.DataFrame()
+
+    years = _horizon_years(date, end_date)
     effective_allowance = allowance if allowance is not None else get_allowance(config)
 
     snapshot = PortfolioSnapshot(portfolio, date)
@@ -105,45 +120,60 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
     if start_capital <= 0:
         raise InputError("Negative cash balances cancel out the securities value, nothing left to withdraw")
 
-    gross = start_capital * amortization_factor(assumed_return / 100, years)
     gain_per_euro = taxable_gain / start_capital
-    tax = max(gross * gain_per_euro - effective_allowance, 0) * tax_rate / 100
-    net = gross - tax
 
-    return pd.DataFrame([{
-        'assumedReturn': Percent(assumed_return),
-        'grossPerYear': Money(gross),
-        'netPerYear': Money(net),
-        'netPerMonth': Money(net / 12),
-        'netRate': Percent(net / start_capital * 100),
-    }])[_RESULT_COLUMNS]
+    rows = []
+    for assumed_return in assumed_returns:
+        gross = start_capital * amortization_factor(assumed_return / 100, years)
+        tax = max(gross * gain_per_euro - effective_allowance, 0) * tax_rate / 100
+        net = gross - tax
+        rows.append({
+            'assumedReturn': Percent(assumed_return),
+            'grossPerYear': Money(gross),
+            'netPerYear': Money(net),
+            'netPerMonth': Money(net / 12),
+            'netRate': Percent(net / start_capital * 100),
+        })
+
+    return pd.DataFrame(rows)[_RESULT_COLUMNS]
 
 
-def _next_step_hint(net: Money, cash: Money) -> str:
-    hint = (f'Run [cyan]simulate share-sell --target-net {net:.2f} --summary[/cyan] '
+def _next_step_hint(net: Money | None, cash: Money) -> str:
+    lead, target = ('Run', f'{net:.2f}') if net is not None else ('Pick a row and run', '<netPerYear>')
+    hint = (f'{lead} [cyan]simulate share-sell --target-net {target} --summary[/cyan] '
             'to turn this year\'s net amount into a concrete sell plan per security.')
     if cash > 0:
-        hint += f' If you draw on your cash balance of {cash:.2f} instead, lower --target-net accordingly.'
+        hint += f' If you draw on your cash balance of {cash:.2f} instead, lower [cyan]--target-net[/cyan] accordingly.'
     return hint
 
 
 @app.command(name="pmt")
-def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         ctx: typer.Context,
-        assumed_return: Annotated[Percent, typer.Option("--return", min=0, max=100, prompt="Assumed Annual Real Return (%)", prompt_required=True, help="Assumed annual real return in percent")],
-        years: Annotated[int, typer.Option(min=1, prompt="Horizon (Years)", prompt_required=True, help="Number of years the capital has to last")],
+        assumed_returns: Annotated[list[Percent] | None, typer.Option("--return", min=0, max=100, help="Assumed annual real return in percent; repeat the option to compare several rates (defaults to config)")] = None,
+        end_date: Annotated[datetime | None, typer.Option("--end-date", formats=["%Y-%m-%d"], help="Date by which the capital should be depleted (defaults to config)")] = None,
         date: Annotated[datetime | None, typer.Option(formats=["%Y-%m-%d"], help="Snapshot date (defaults to today)")] = None,
         tax_rate: Annotated[Percent, typer.Option(help="Your personal tax rate", min=0, max=100, callback=tax_rate_callback)] = None,  # type: ignore
         allowance: Annotated[Money, typer.Option("--allowance", help="Sparerpauschbetrag still available this year; defaults to config (1000 EUR, use 2000 for joint assessment)", min=0, callback=allowance_callback)] = None,  # type: ignore
         tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data", callback=tax_csv_callback)] = None
 ) -> None:
     """
-    Simulate an amortization withdrawal (annuity, "VPW"): the net amount to spend this year so that
-    the portfolio reaches zero after the given horizon at the assumed real return. Recompute yearly.
+    Simulate an amortization withdrawal (annuity, "ARVA"): the net amount to spend this year so that
+    the portfolio reaches zero by the given end date at the assumed real return. Recompute yearly.
     """
     portfolio = cast(Portfolio, ctx.obj.portfolio)
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
+
+    if not assumed_returns:
+        assumed_returns = [Percent(value) for value in get_command_config(config, 'simulate.pmt.returns', [])]
+    if not assumed_returns:
+        assumed_returns = [Percent(typer.prompt("Assumed Annual Real Return (%)", type=click.FloatRange(0, 100)))]
+    if end_date is None:
+        config_end_date = get_command_config(config, 'simulate.pmt.end-date')
+        end_date = datetime.fromisoformat(config_end_date) if config_end_date else None
+    if end_date is None:
+        end_date = typer.prompt("End Date", type=click.DateTime(formats=["%Y-%m-%d"]))
 
     if date is None:
         date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -151,15 +181,17 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
     tax_files = [tax_csv] if tax_csv else get_tax_files(config)
     tax_csv_data = load_prepaid_tax_data(tax_files, portfolio)
 
-    result = prepare_pmt_result(portfolio, config, date, tax_rate, assumed_return, years, tax_csv_data, allowance)
+    result = prepare_pmt_result(portfolio, config, date, tax_rate, assumed_returns, end_date, tax_csv_data, allowance)
 
     if result.empty:
         console.print(output.empty_result())
         return
 
+    rate_clause = (f'a constant real return of {assumed_returns[0]:.2f}% p.a.'
+                   if len(assumed_returns) == 1 else 'the constant real return assumed per row.')
     console.print(output.introduction(
         f'Withdrawing the [bold]gross[/bold] amount at the start of each year runs the portfolio down to zero '
-        f'after {years} years at a constant real return of {assumed_return:.2f}% p.a. '
+        f'by {end_date.strftime("%Y-%m-%d")} ({round(_horizon_years(date, end_date) * 12)} months left) at {rate_clause} '
         f'The [bold]net[/bold] amount is what is left to spend after German taxes on the drawn gain '
         f'(up to {allowance:.2f} Sparerpauschbetrag applied). All amounts are in today\'s purchasing power.\n'
         '[dim]Restrictions: cash is included at par; future Vorabpauschale and the nominal taxation of real gains are not modeled.[/dim]'
@@ -170,7 +202,8 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
     ))
 
     cash = Money(PortfolioSnapshot(portfolio, date).balances.sum())
-    console.print(output.hint(_next_step_hint(Money(result.iloc[0]['netPerYear']), cash)))
+    net = Money(result.iloc[0]['netPerYear']) if len(result) == 1 else None
+    console.print(output.hint(_next_step_hint(net, cash)))
     console.print(output.hint(
         'Recompute yearly with the actual balance and the remaining horizon — '
         'lower realized returns shrink the next amount instead of causing ruin.'

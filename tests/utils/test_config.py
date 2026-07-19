@@ -111,7 +111,7 @@ def test_should_ignore_invalid_config_at_default_location(monkeypatch: pytest.Mo
 def test_should_still_reject_invalid_config_when_explicitly_passed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _install_fragments(monkeypatch, {})
 
-    with pytest.raises(JsonSchemaValidationError, match=r"'simulate' was unexpected"):
+    with pytest.raises(JsonSchemaValidationError, match=r"commands\.simulate: .*'safe-withdrawal' was unexpected"):
         validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n'))
 
 def test_should_validate_plugin_config_when_fragment_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -124,7 +124,7 @@ def test_should_validate_plugin_config_when_fragment_registered(monkeypatch: pyt
 def test_should_reject_plugin_config_when_fragment_not_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _install_fragments(monkeypatch, {})
 
-    with pytest.raises(JsonSchemaValidationError, match=r"'simulate' was unexpected"):
+    with pytest.raises(JsonSchemaValidationError, match=r"commands\.simulate: .*'safe-withdrawal' was unexpected"):
         validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n'))
 
 def test_should_reject_unknown_key_in_plugin_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -185,12 +185,12 @@ def test_should_skip_broken_schema_fragments(monkeypatch: pytest.MonkeyPatch, tm
 def test_should_reject_mounting_inside_another_plugins_section(monkeypatch: pytest.MonkeyPatch) -> None:
     """A mount path nested inside an earlier fragment is a name conflict, and the fragment constant must stay pristine."""
     _install_fragments(monkeypatch, {
-        'simulate': 'tests.utils.test_config:PLUGIN_SCHEMA',
-        'simulate.foo': 'tests.utils.test_config:OTHER_PLUGIN_SCHEMA',
+        'custom': 'tests.utils.test_config:PLUGIN_SCHEMA',
+        'custom.foo': 'tests.utils.test_config:OTHER_PLUGIN_SCHEMA',
     })
     pristine = json.dumps(PLUGIN_SCHEMA, sort_keys=True)
 
-    with pytest.raises(RuntimeError, match=r'commands\.simulate\.foo'):
+    with pytest.raises(RuntimeError, match=r'commands\.custom\.foo'):
         _merged_schema()
 
     assert json.dumps(PLUGIN_SCHEMA, sort_keys=True) == pristine

@@ -318,7 +318,7 @@ def test_pmt_json_output(request: TopRequest) -> None:
         '--no-cache',
         'simulate', 'pmt',
         '--return', '5',
-        '--years', '30',
+        '--end-date', '2056-01-01',
         '--tax-rate', '26.375',
     ])
 
@@ -330,6 +330,47 @@ def test_pmt_json_output(request: TopRequest) -> None:
     assert {'assumedReturn', 'grossPerYear', 'netPerYear', 'netPerMonth', 'netRate'} <= row.keys()
     assert 0 < row['netPerYear'] <= row['grossPerYear']
     assert row['netPerMonth'] == pytest.approx(row['netPerYear'] / 12)
+
+
+def test_pmt_multiple_return_rates(request: TopRequest) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'pmt',
+        '--return', '2',
+        '--return', '5',
+        '--end-date', '2056-01-01',
+        '--tax-rate', '26.375',
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert [row['assumedReturn'] for row in rows] == [2.0, 5.0]
+    assert rows[0]['grossPerYear'] < rows[1]['grossPerYear']  # higher assumed return allows a higher withdrawal
+
+
+def test_pmt_reads_defaults_from_config(request: TopRequest, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+    config_file = tmp_path / 'config.toml'
+    config_file.write_text('[commands.simulate.pmt]\nreturns = [3, 6]\nend-date = "2051-01-01"\n', encoding='utf-8')
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(config_file),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'pmt',
+        '--tax-rate', '26.375',
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert [row['assumedReturn'] for row in json.loads(result.output)] == [3.0, 6.0]
 
 
 def test_anonymize_warns_and_keeps_output_clean(request: TopRequest, caplog: pytest.LogCaptureFixture) -> None:

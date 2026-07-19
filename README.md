@@ -96,6 +96,13 @@ exemption-rate-attribute = "b3c38686-2d22-4b5d-8e38-e61dcf6fdde3"  # for per-sec
 allowance = 1000  # Sparerpauschbetrag in EUR
 ```
 
+Default input values for `simulate pmt` can be configured as well (command-line options take precedence):
+```toml
+[commands.simulate.pmt]
+returns = [2, 4, 6]  # assumed annual real returns in percent, one result row each
+end-date = "2055-12-31"  # date by which the capital should be depleted
+```
+
 ### Validate Data
 
 | Command    | Description                                      |

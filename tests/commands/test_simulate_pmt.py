@@ -132,20 +132,15 @@ def test_prepare_pmt_result_missing_prices(portfolio_with_purchases: Portfolio) 
         prepare_pmt_result(portfolio_with_purchases, {}, _DATE, _TAX_RATE, 5.0, 30)
 
 
-def test_next_step_hint_subtracts_cash_from_sell_target() -> None:
-    assert '--target-net 800.00' in _next_step_hint(1000.0, 200.0)
-    assert 'cash balance of 200.00 first' in _next_step_hint(1000.0, 200.0)
+def test_next_step_hint_targets_full_net_and_mentions_cash_reserve() -> None:
+    hint = _next_step_hint(1000.0, 200.0)
+    assert '--target-net 1000.00' in hint  # cash is a reserve (e.g. two-bucket strategy), not deducted
+    assert 'cash balance of 200.00' in hint
 
 
-def test_next_step_hint_without_cash_targets_full_net() -> None:
-    assert '--target-net 1000.00' in _next_step_hint(1000.0, 0.0)
-    assert '--target-net 1000.00' in _next_step_hint(1000.0, -500.0)  # overdrafts are not added to the sell target
-
-
-def test_next_step_hint_cash_covers_withdrawal() -> None:
-    hint = _next_step_hint(1000.0, 1500.0)
-    assert 'no security sales are needed' in hint
-    assert '--target-net' not in hint
+def test_next_step_hint_without_cash_omits_cash_mention() -> None:
+    assert 'cash balance' not in _next_step_hint(1000.0, 0.0)
+    assert 'cash balance' not in _next_step_hint(1000.0, -500.0)
 
 
 def test_prepare_pmt_result_negative_cash_cancels_depot(portfolio_with_prices: Portfolio) -> None:

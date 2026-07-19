@@ -120,15 +120,11 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
 
 
 def _next_step_hint(net: Money, cash: Money) -> str:
-    cash = max(cash, 0.0)
-    sell_target = net - cash
-    if sell_target <= 0:
-        return f'Your cash balance of {cash:.2f} already covers this year\'s net amount, no security sales are needed.'
-    if cash > 0:
-        return (f'Spend your cash balance of {cash:.2f} first, then run '
-                f'[cyan]simulate share-sell --target-net {sell_target:.2f} --summary[/cyan] to cover the rest with security sales.')
-    return (f'Run [cyan]simulate share-sell --target-net {sell_target:.2f} --summary[/cyan] '
+    hint = (f'Run [cyan]simulate share-sell --target-net {net:.2f} --summary[/cyan] '
             'to turn this year\'s net amount into a concrete sell plan per security.')
+    if cash > 0:
+        hint += f' If you draw on your cash balance of {cash:.2f} instead, lower --target-net accordingly.'
+    return hint
 
 
 @app.command(name="pmt")
@@ -165,7 +161,8 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
         f'Withdrawing the [bold]gross[/bold] amount at the start of each year runs the portfolio down to zero '
         f'after {years} years at a constant real return of {assumed_return:.2f}% p.a. '
         f'The [bold]net[/bold] amount is what is left to spend after German taxes on the drawn gain '
-        f'(up to {allowance:.2f} Sparerpauschbetrag applied). All amounts are in today\'s purchasing power.'
+        f'(up to {allowance:.2f} Sparerpauschbetrag applied). All amounts are in today\'s purchasing power.\n'
+        '[dim]Restrictions: cash is included at par; future Vorabpauschale and the nominal taxation of real gains are not modeled.[/dim]'
     ))
     console.print(*output.result_table(
         result,
@@ -178,7 +175,4 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
         'Recompute yearly with the actual balance and the remaining horizon — '
         'lower realized returns shrink the next amount instead of causing ruin.'
     ))
-    console.print(output.text(
-        'Cash is included at par; future Vorabpauschale and the nominal taxation of real gains are not modeled.'
-    ), style="dim")
     console.print(output.text(footer()), style="dim")

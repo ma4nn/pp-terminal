@@ -332,6 +332,25 @@ def test_pmt_json_output(request: TopRequest) -> None:
     assert row['netPerMonth'] == pytest.approx(row['netPerYear'] / 12)
 
 
+def test_anonymize_warns_and_keeps_output_clean(request: TopRequest, caplog: pytest.LogCaptureFixture) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    with caplog.at_level(logging.WARNING, logger='pp_terminal.main'):
+        result = runner.invoke(app, [
+            '--file', str(fixtures_dir / 'kommer.ids.xml'),
+            '--no-cache',
+            '--anonymize',
+            '--output', 'json',
+            'view', 'accounts'
+        ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert 'anonymized' in caplog.text  # emitted as a log warning (stderr), not as part of the result
+    assert 'anonymized' not in result.stdout
+    assert json.loads(result.stdout)  # the warning must not corrupt machine-readable output
+
+
 def test_view_securities_csv_output(request: TopRequest) -> None:
     runner = CliRunner()
     fixtures_dir = request.path.parent.parent / 'fixtures'

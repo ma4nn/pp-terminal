@@ -22,10 +22,11 @@ import locale
 from pathlib import Path
 from types import SimpleNamespace
 import logging
-import os
+import zlib
 from typing import Optional
 
 from rich import print # pylint: disable=redefined-builtin
+from rich.console import Console as RichConsole
 from rich.logging import RichHandler
 import typer
 from typing_extensions import Annotated
@@ -47,7 +48,8 @@ app.add_typer(typer.Typer(no_args_is_help=True), name="simulate", help="Run simu
 app.add_typer(typer.Typer(no_args_is_help=True), name="view", help="View details about portfolio entities like accounts or securities.")
 
 # init default logging (this is e.g. import for errors during command plugin load)
-logging.basicConfig(level=logging.WARN, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(rich_tracebacks=False, show_time=False, show_path=False)])
+logging.basicConfig(level=logging.WARN, format="%(message)s", datefmt="[%X]",
+                    handlers=[RichHandler(rich_tracebacks=False, show_time=False, show_path=False, console=RichConsole(stderr=True))])
 log = logging.getLogger(__name__)
 
 locale.setlocale(category=locale.LC_ALL, locale='')
@@ -68,8 +70,8 @@ def _create_anonymized_temp_file(original_file: Path) -> Path:
     """Create a deterministic anonymized version of the XML file next to the original."""
     temp_path = original_file.parent / f".{original_file.stem}.anon{original_file.suffix}"
 
-    # Use deterministic seed based on file path
-    seed = hash(str(original_file.resolve())) % (2**31)
+    # Use deterministic seed based on file path (crc32, as str hashes are randomized per process)
+    seed = zlib.crc32(str(original_file.resolve()).encode()) % (2**31)
     log.debug("Anonymizing data with seed %d", seed)
 
     anonymizer = XmlAnonymizer(seed=seed, config=get_config().get('anonymize', {}).get('attributes', {}))
@@ -79,7 +81,7 @@ def _create_anonymized_temp_file(original_file: Path) -> Path:
     # Register cleanup on program exit
     def cleanup() -> None:
         try:
-            os.unlink(temp_path)
+            temp_path.unlink(missing_ok=True)
             log.debug("Removed temporary anonymized file at %s", temp_path)
         except OSError as e:
             log.warning("Failed to remove temporary file %s: %s", temp_path, e)
@@ -110,7 +112,8 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 ) -> None:
 
     if verbose:
-        logging.basicConfig(force=True, level=logging.DEBUG, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(rich_tracebacks=True, show_time=False)])
+        logging.basicConfig(force=True, level=logging.DEBUG, format="%(message)s", datefmt="[%X]",
+                            handlers=[RichHandler(rich_tracebacks=True, show_time=False, console=RichConsole(stderr=True))])
 
     set_precision(precision)
     should_anonymize = anonymize or 'anonymize' in get_config()
@@ -125,6 +128,9 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             output=create_strategy(output),
             config=get_config(),
             verbose=verbose or False)
+
+        if should_anonymize:
+            log.warning('The data has been anonymized, amounts do not reflect the real portfolio.')
 
     except (RuntimeError, InputError) as e:
         if verbose:

@@ -28,7 +28,7 @@ import pytest
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import TransactionType, AccountType, Percent, Money, VapResultSchema, SecuritySchema
-from pp_terminal.domain.vap import calculate_vap
+from pp_terminal.domain.vap import calculate_vap, apply_allowance_to_vap
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
 from tests.conftest import TAX_RATE, EXEMPT_RATE_CONFIG
 
@@ -303,3 +303,31 @@ def test_custom_exempt_rate_produces_positive_vap(request: TopRequest) -> None:
         for idx, value in vap_values[col].items():
             if pd.notna(value):
                 assert value >= 0, f"VAP should be non-negative, got {value} for {vap_values.loc[idx, 'name']} in {col}"
+
+
+def _vap_table() -> DataFrame[VapResultSchema]:
+    """Two securities in one account, VAP tax 100 and 300 (grand total 400)."""
+    frame = pd.DataFrame({
+        'wkn': ['W1', 'W2'], 'name': ['ETF A', 'ETF B'], 'currency': ['EUR', 'EUR'], 'Depot': [100.0, 300.0],
+    })
+    return VapResultSchema.validate(frame)
+
+
+def test_apply_allowance_to_vap_reduces_total_by_allowance_times_rate() -> None:
+    relieved = apply_allowance_to_vap(_vap_table(), allowance=1000.0, tax_rate=26.375)
+
+    # total VAP tax 400 - 1000*0.26375 (263.75) = 136.25, split proportionally 1:3
+    assert relieved['Depot'].sum() == pytest.approx(400.0 - 263.75)
+    assert relieved.loc[0, 'Depot'] == pytest.approx(relieved.loc[1, 'Depot'] / 3)
+
+
+def test_apply_allowance_to_vap_never_goes_negative() -> None:
+    relieved = apply_allowance_to_vap(_vap_table(), allowance=1_000_000.0, tax_rate=26.375)
+
+    assert relieved['Depot'].sum() == pytest.approx(0.0)  # allowance dwarfs the VAP -> no tax owed
+
+
+def test_apply_allowance_to_vap_zero_is_noop() -> None:
+    relieved = apply_allowance_to_vap(_vap_table(), allowance=0.0, tax_rate=26.375)
+
+    assert relieved['Depot'].sum() == pytest.approx(400.0)

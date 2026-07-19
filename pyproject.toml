@@ -7,16 +7,16 @@ requires-python = ">=3.13,<4.0.0"
 license = "GPL-3.0-or-later"
 dependencies = [
     "typer (>=0.15.1,<0.22.0)",
-    "pandas (>=3.0.0,<4.0.0)",
+    "pandas (>=3.0.3,<4.0.0)",
     "rich (>=14.3.4,<15.0.0)",
     "pandera (>=0.29.0,<0.30.0)",
     "babel (>=2.16.0,<3.0.0)",
-    "lxml (>=6.1.0,<7.0.0)",
+    "lxml (>=6.1.1,<7.0.0)",
     "typer-config (>=1.4.0,<2.0.0)",
     "jsonschema (>=4.23.0,<5.0.0)",
-    "faker (>=40.1.2,<41.0.0)",
+    "faker (>=40.28.1,<41.0.0)",
     "openpyxl (>=3.1.0,<4.0.0)",
-    "mcp (>=1.0.0,<2.0.0)",
+    "mcp (>=1.28.1,<2.0.0)",
 ]
 scripts = { pp-terminal = "pp_terminal.main:app" }
 entry-points = { "pp_terminal.commands" = { "view.accounts" = "pp_terminal.commands.view_accounts:app", "view.securities" = "pp_terminal.commands.view_securities:app", "view.taxonomies" = "pp_terminal.commands.view_taxonomies:app", "simulate.vorabpauschale" = "pp_terminal.commands.simulate_vap:app", "simulate.interest" = "pp_terminal.commands.simulate_interest:app", "simulate.share-sell" = "pp_terminal.commands.simulate_share_sell:app", "validate" = "pp_terminal.commands.validate:app", "export" = "pp_terminal.commands.export:app" } }

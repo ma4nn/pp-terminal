@@ -33,7 +33,7 @@ from pp_terminal.output.strategy import OutputStrategy
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import Percent, TransactionType, Money, InterestResultSchema
-from pp_terminal.output.table_decorator import TableOptions, format_value
+from pp_terminal.output.table_decorator import TableOptions, format_value, colorize
 
 app = typer.Typer()
 console = Console()
@@ -90,7 +90,7 @@ def calculate_interest(snapshot_begin: PortfolioSnapshot, snapshot_end: Portfoli
 def _format_value_wrapper(value: Any, index: str, row: pd.Series) -> str:
     if index == 'Actual Interest' and isinstance(value, Money):
         color = 'red' if value < row['Simulated Interest'] else 'green'
-        return f"[{color}]{format_value(value, index, row)}[/{color}]"
+        return colorize(format_value(value, index, row), color)
 
     return format_value(value, index, row)
 

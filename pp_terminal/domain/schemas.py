@@ -78,15 +78,6 @@ class TransactionSchema(pa.DataFrameModel):
     currency: Series[str] = pa.Field(nullable=True)
 
 
-class Account(BaseModel):  # pylint: disable=too-few-public-methods
-    accountId: str
-    name: str
-    type: str
-    referenceAccount: Optional[str] = pa.Field(nullable=True)
-    isRetired: Optional[bool] = pa.Field(coerce=True)
-    currency: str | None
-    additionalAttributes: dict[str, Any] = {}
-
 class AccountSchema(pa.DataFrameModel):
     accountId: Index[str]
     name: Series[str]
@@ -108,6 +99,7 @@ class SecuritySchema(pa.DataFrameModel):
     securityId: Index[str]
     name: Series[str]
     wkn: Series[str] = pa.Field(nullable=True)
+    isin: Optional[Series[str]] = pa.Field(nullable=True)
     currency: Series[str] = pa.Field(nullable=True)
     isRetired: Optional[Series[bool]] = pa.Field(coerce=True)
 

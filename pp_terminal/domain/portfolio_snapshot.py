@@ -38,9 +38,9 @@ class PortfolioSnapshot:
     _per_date: datetime
     _portfolio: Portfolio
 
-    def __init__(self, portfolio: Portfolio, per_date: datetime = datetime.now()):
+    def __init__(self, portfolio: Portfolio, per_date: datetime | None = None):
         self._portfolio = portfolio
-        self._per_date = per_date
+        self._per_date = per_date if per_date is not None else datetime.now()
 
     @property
     def date(self) -> datetime:
@@ -74,7 +74,8 @@ class PortfolioSnapshot:
         return TransactionSchema.validate(transactions.pipe(filter_earlier_than, target_date=self._per_date))
 
     @property
-    def shares(self) -> pd.Series:
+    def share_balances(self) -> pd.Series:
+        """Net share balance per account/security/currency, including negative balances that indicate data errors."""
         transactions = self.securities_account_transactions
         transactions['shares'] = transactions.apply(
             lambda row: -1 if row['type'] in enum_list_to_values(_NEGATIVE_SECURITIES_ACCOUNT_TRANSACTION_TYPES) else 1,
@@ -90,6 +91,12 @@ class PortfolioSnapshot:
             TransactionType.DELIVERY_OUTBOUND
         ]).groupby(['accountId', 'securityId', 'currency'])['shares'].sum()
         shares.name = 'shares'
+
+        return shares
+
+    @property
+    def shares(self) -> pd.Series:
+        shares = self.share_balances
 
         return shares[shares > 0]
 

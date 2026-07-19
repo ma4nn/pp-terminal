@@ -17,5 +17,22 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
-class InputError(Exception):
-    pass
+from typing import Any, Callable
+
+from pp_terminal.output.strategy import OutputStrategy
+from pp_terminal.validation.engine import ValidationResult
+
+
+def messages_renderer(
+    validation_results: dict[str, ValidationResult],
+    output: OutputStrategy
+) -> Callable[[Any], Any]:
+    """Returns a mapper turning an entity id into its rendered validation messages.
+
+    The rendered value is format-specific: a display string for table/CSV, a
+    structured severity object for JSON. Hence the ``Any`` return type.
+    """
+    def render(entity_id: Any) -> Any:
+        result = validation_results.get(str(entity_id), ValidationResult.empty())
+        return output.render_messages(result.violation_messages, result.has_errors)
+    return render

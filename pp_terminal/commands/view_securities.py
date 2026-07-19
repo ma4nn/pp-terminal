@@ -23,7 +23,7 @@ from typing import cast, Callable, Any
 
 import typer
 import pandas as pd
-from pp_terminal.data.filters import clean_for_display, filter_by_security, pivot_taxonomy_columns
+from pp_terminal.data.filters import clean_for_display, filter_by_security, pivot_taxonomy_columns, retired_row_labels
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.vap import calculate_vap_by_security
 from pp_terminal.output.column_utils import normalize_columns
@@ -33,7 +33,8 @@ from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.output.table_decorator import TableOptions, format_value
-from pp_terminal.validation.engine import validate_securities, ValidationResult
+from pp_terminal.commands.message_column import messages_renderer
+from pp_terminal.validation.engine import validate_securities
 from pp_terminal.utils.config import get_command_config
 from pp_terminal.domain.schemas import Attribute
 
@@ -42,9 +43,10 @@ console = Console()
 log = logging.getLogger(__name__)
 
 
-def prepare_securities_df(
+def prepare_securities_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     portfolio: Portfolio,
     config: Config,
+    output: OutputStrategy,
     by: datetime,
     active: bool = False,
     in_stock: bool = False
@@ -71,10 +73,8 @@ def prepare_securities_df(
     if in_stock:
         df = df[df['shares'] > 0.001]
 
-    validation_results = validate_securities(portfolio, config)
-    df['messages'] = df['securityId'].map(
-        lambda sid: validation_results.get(str(sid), ValidationResult.empty()).messages or ''
-    )
+    validation_results = validate_securities(portfolio, snapshot, config)
+    df['messages'] = df['securityId'].map(messages_renderer(validation_results, output))
 
     df['costBasis'] = df['securityId'].map(
         lambda sid: calculate_total_cost_basis(portfolio.securities_account_transactions.pipe(filter_by_security, security_id=sid))
@@ -114,7 +114,8 @@ def print_securities(  # pylint: disable=too-many-locals
         config_fields = get_command_config(config, 'view.securities.fields')
         fields = ','.join(config_fields) if config_fields else 'SecurityId,Name,Wkn,Currency,Shares,Messages'
 
-    df = prepare_securities_df(portfolio, config, by, active, in_stock)
+    df = prepare_securities_df(portfolio, config, output, by, active, in_stock)
+    retired_ids = retired_row_labels(df)
 
     uuid_to_name = {uuid: attr.name for uuid, attr in portfolio.security_attributes.items()}
     requested_columns = [uuid_to_name.get(col.strip(), col.strip()) for col in fields.split(',')]
@@ -138,7 +139,8 @@ def print_securities(  # pylint: disable=too-many-locals
             title=f"{'Active ' if active else ''}Securities",
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
             show_index=False,
-            value_formatter=formatter_with_types(portfolio.security_attributes)
+            value_formatter=formatter_with_types(portfolio.security_attributes),
+            dimmed_rows=retired_ids
         )
     ))
     console.print(output.text(footer()), style="dim")

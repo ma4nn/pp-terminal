@@ -25,7 +25,7 @@ import pandas as pd
 import rich
 from rich.console import NewLine
 
-from .table_decorator import TableDecorator, TableOptions
+from .table_decorator import TableDecorator, TableOptions, colorize
 
 
 class OutputFormat(str, Enum):
@@ -53,6 +53,9 @@ class OutputStrategy(ABC):
     def warning(self, message: str) -> str:  # pylint: disable=unused-argument
         return ''
 
+    def render_messages(self, messages: list[str], is_error: bool) -> str:  # pylint: disable=unused-argument
+        return '; '.join(messages)
+
     def empty_result(self) -> str:
         return ''
 
@@ -76,6 +79,12 @@ class RichOutputStrategy(OutputStrategy):
     def warning(self, message: str) -> str:
         return ':backhand_index_pointing_right: [bold]Warning:[/bold] ' + self.text(message)
 
+    def render_messages(self, messages: list[str], is_error: bool) -> str:
+        if not messages:
+            return ''
+        icon, color = ('❌', 'red') if is_error else ('⚠️', 'yellow')
+        return colorize(f'{icon} {"; ".join(messages)}', color)
+
     def text(self, message: str) -> str:
         return message + "\n"
 
@@ -92,6 +101,11 @@ class CsvOutputStrategy(OutputStrategy):
 
 
 class JsonOutputStrategy(OutputStrategy):
+    def render_messages(self, messages: list[str], is_error: bool) -> Any:
+        if not messages:
+            return None
+        return {'severity': 'error' if is_error else 'warning', 'text': '; '.join(messages)}
+
     def result_table(self, df: pd.DataFrame | None, options: TableOptions) -> Any:
         if df is None:
             return self.empty_result()

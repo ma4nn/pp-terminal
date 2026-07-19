@@ -18,10 +18,18 @@
 """
 
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 
 from pp_terminal.domain.schemas import Attribute, TransactionType
+
+
+def retired_row_labels(df: pd.DataFrame) -> set[Any]:
+    """Returns the index labels of retired (inactive) rows, empty if not applicable."""
+    if 'isRetired' not in df.columns:
+        return set()
+    return set(df.index[df['isRetired'].eq(True)])
 
 
 def filter_earlier_than(df: pd.DataFrame, target_date: datetime) -> pd.DataFrame:

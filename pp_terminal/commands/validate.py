@@ -19,113 +19,57 @@
 
 import logging
 from datetime import datetime
-from functools import wraps
-from typing import Callable, Any, cast
+from typing import Annotated, Callable, cast
 
+import click
 import typer
-from typer.models import CommandFunctionType
 
 from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
-from pp_terminal.exceptions import ValidationError
-from pp_terminal.utils.config import Config
-from pp_terminal.utils.helper import run_all_group_cmds
-from pp_terminal.output.strategy import Console
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
-from pp_terminal.validation.engine import validate_accounts
-from pp_terminal.validation.engine import validate_securities
+from pp_terminal.utils.config import Config
+from pp_terminal.validation.engine import ValidationResult, configured_rule_types, validate_accounts, validate_securities
+from pp_terminal.validation.rules import known_rule_types
 
 app = typer.Typer()
-console = Console()
 log = logging.getLogger(__name__)
 
-validate_app = typer.Typer()
-app.add_typer(validate_app, name="validate", help='Run configured validation rules on the portfolio data.')
 
-exit_code = 0  # pylint: disable=invalid-name
-
-
-def catch_errors(func: CommandFunctionType) -> Callable[..., CommandFunctionType]:
-    @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        global exit_code  # pylint: disable=global-statement
-
-        try:
-            return func(*args, **kwargs)
-        except ValidationError:
-            exit_code = 1
-            ctx = kwargs['ctx'] if 'ctx' in kwargs else args[0] if len(args) > 0 else None
-
-            if ctx and ctx.invoked_subcommand is None:
-                raise typer.Exit(exit_code)  # pylint: disable=raise-missing-from
-
-            return None
-
-    return wrapper
-
-
-@validate_app.command(name="securities")
-@catch_errors
-def log_validate_securities(ctx: typer.Context) -> None:
-    """Validate security prices."""
-    portfolio = cast(Portfolio, ctx.obj.portfolio)
-    config = cast(Config, ctx.obj.config)
-
-    results = validate_securities(portfolio, config)
-
-    if not results:
-        log.debug('No security validation rules configured or no securities to validate')
-        return
-
+def _log_violations(results: dict[str, ValidationResult], describe_entity: Callable[[str], str]) -> bool:
     has_errors = False
-    for security_id, result in results.items():
-        if not result.violations:
-            continue
-
-        security = get_security_by_id(portfolio, security_id)
-
+    for entity_id, result in results.items():
         for rule, message in result.violations:
-            full_message = f'Security "{security.name}" ({security_id}) {message}'
-            rule.log_violation(full_message)
+            rule.log_violation(f'{describe_entity(entity_id)} {message}')
             if rule.is_error():
                 has_errors = True
 
-    if has_errors:
-        raise ValidationError()
+    return has_errors
 
 
-@validate_app.command(name="accounts")
-@catch_errors
-def log_validate_accounts(ctx: typer.Context) -> None:
-    """Validate deposit accounts using configured validation rules."""
+@app.command(name="validate")
+def run_validations(
+        ctx: typer.Context,
+        rule: Annotated[list[str] | None, typer.Option('--rule', click_type=click.Choice(sorted(known_rule_types())), help='Run only rules of this type (repeatable); defaults to all configured rules.')] = None,
+) -> None:
+    """Run configured validation rules on the portfolio data."""
     portfolio = cast(Portfolio, ctx.obj.portfolio)
     config = cast(Config, ctx.obj.config)
+
+    rule_types = set(rule) if rule else None
+    if rule_types is not None:
+        unmatched = rule_types - configured_rule_types(config)
+        if unmatched:
+            log.warning('No rules of type(s) %s configured, nothing to validate for them', ', '.join(sorted(unmatched)))
 
     snapshot = PortfolioSnapshot(portfolio, datetime.now())
-    results = validate_accounts(portfolio, snapshot, config)
 
-    if not results:
-        log.debug('No account validation rules configured or no accounts to validate')
-        return
-
-    has_errors = False
-    for account_id, result in results.items():
-        if not result.violations:
-            continue
-
-        account_name = portfolio.deposit_accounts.loc[account_id, 'name']
-
-        for rule, message in result.violations:
-            full_message = f'Account "{account_name}" ({account_id}) {message}'
-            rule.log_violation(full_message)
-            if rule.is_error():
-                has_errors = True
+    has_errors = _log_violations(
+        validate_accounts(portfolio, snapshot, config, rule_types),
+        lambda account_id: f'Account "{portfolio.deposit_accounts.loc[account_id, "name"]}" ({account_id})',
+    )
+    has_errors |= _log_violations(
+        validate_securities(portfolio, snapshot, config, rule_types),
+        lambda security_id: f'Security "{get_security_by_id(portfolio, security_id).name}" ({security_id})',
+    )
 
     if has_errors:
-        raise ValidationError()
-
-
-@validate_app.callback(invoke_without_command=True)
-@run_all_group_cmds(validate_app)
-def validate_all(ctx: typer.Context) -> None:  # pylint: disable=unused-argument
-    if ctx.invoked_subcommand is None:
-        raise typer.Exit(exit_code)
+        raise typer.Exit(1)

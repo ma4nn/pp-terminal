@@ -18,7 +18,15 @@
 """
 import typer
 
-from pp_terminal.domain.schemas import Percent
+from pp_terminal.domain.schemas import Percent, Money
+from pp_terminal.utils.config import get_allowance
+
+
+def allowance_callback(ctx: typer.Context, param: typer.CallbackParam, value: Money | None) -> Money:  # pylint: disable=unused-argument
+    # 1. If provided via CLI, use it; 2. otherwise fall back to config (or the 1000 EUR default)
+    if value is not None:
+        return value
+    return Money(get_allowance(ctx.obj.config))
 
 
 def tax_rate_callback(ctx: typer.Context, param: typer.CallbackParam, value: Percent | None) -> Percent:  # pylint: disable=unused-argument

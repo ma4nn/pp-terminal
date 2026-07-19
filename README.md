@@ -3,16 +3,25 @@
 ![build status](https://github.com/ma4nn/pp-terminal/actions/workflows/ci.yml/badge.svg) [![Join My Discord](https://dev-investor.de/wp-content/uploads/join-discord.svg)](https://dev-investor.de/chat)
 
 A powerful command-line interface (CLI) that allows programmatic access to [Portfolio Performance](https://www.portfolio-performance.info/) data 
-to offer a whole new level of insights into your assets.  
+to offer a whole new level of insights into your assets.
 
-_pp-terminal_ can act as an [MCP server](#mcp-server) to give AI models like Claude Opus, Gemini or Qwen access to your 
-(anonymized) portfolio to help you answer questions like
+_pp-terminal_ is a lightweight tool for all the nice-to-have features that won't make it into the official Portfolio Performance app.
+This can be because of country-specific tax rules, complex Java implementation, highly individual requirements, 
+too many edge-cases, etc.
+
+## Use Cases
+
+You can run the single commands individually or _pp-terminal_ can act as an [MCP server](#mcp-server) to give AI models like Claude Opus, Gemini or Qwen access to your 
+(anonymized) portfolio to help you answer questions like:
 - "Give me an overview of my portfolio"
 - "What do you think about my portfolio allocation? Am I overweight anywhere?"
 - "Do I have enough cash to cover the upcoming Vorabpauschale taxes?"
 - "I need 1k EUR after tax. Which securities should I sell to minimize taxes?"
 
-For example, _pp-terminal_ includes a CLI command to calculate the preliminary tax values ("Vorabpauschale") for Germany:
+Thís application **supports specific tax concepts** like FIFO, [Sparer-Pauschbetrag](https://de.wikipedia.org/wiki/Sparer-Pauschbetrag),
+[Grundfreibetrag](https://de.wikipedia.org/wiki/Grundfreibetrag_(Deutschland)), [Günstigerprüfung](https://de.wikipedia.org/wiki/G%C3%BCnstigerpr%C3%BCfung)
+and [Teilfreistellungen](https://de.wikipedia.org/wiki/Investmentsteuergesetz_(Deutschland)).  
+For example, _pp-terminal_ includes a CLI command to calculate the [Vorabpauschale](https://de.wikipedia.org/wiki/Vorabpauschale) (preliminary taxes) for Germany:
 
 ![Vorabpauschale command in pp-terminal](docs/sample_vorabpauschale.png)
 
@@ -22,10 +31,6 @@ For example, _pp-terminal_ includes a CLI command to calculate the preliminary t
 
 > [!TIP]
 > Using MoneyMoney for managing your finances? Check out how to [export Sankey Charts](https://github.com/ma4nn/moneymoney-sankey).
-
-_pp-terminal_ is a lightweight tool for all the nice-to-have features that won't make it into the official Portfolio Performance app.
-This can be because of country-dependant tax rules, complex Java implementation, highly individual requirements, 
-too many edge-cases, etc.
 
 1. [Available Commands](#available-commands)
 2. [Requirements](#requirements)
@@ -82,20 +87,24 @@ fields = ["AccountId", "Name", "Balance"]  # call with --fields=xx to see a list
 The tax configuration for the simulations can be customized in the [configuration file](#configuration-file):
 ```toml
 [tax]
-rate = 26.375  # percentage
-# Optionally define the already paid taxes per share (e.g. for the share-sell command)
+rate = 26.375  # tax rate percentage
+# optionally define the already paid taxes per share (e.g. for the share-sell command)
 files = ["taxes_paid.csv"]  # Format: isin;year;deemed_income_per_share
-exempt-rate = 30  # percentage
-exempt-rate-attribute = "b3c38686-2d22-4b5d-8e38-e61dcf6fdde3"  # for per-security exemption rates 
+exemption-rate = 30  # percentage
+exemption-rate-attribute = "b3c38686-2d22-4b5d-8e38-e61dcf6fdde3"  # for per-security exemption rates
+allowance = 1000  # Sparerpauschbetrag in EUR
 ```
 
 ### Validate Data
 
-| Command               | Description                                                 |
-|-----------------------|-------------------------------------------------------------|
-| `validate`            | Run all validation checks on the portfolio data             |
-| `validate accounts`   | Run configured accounts validations, e.g. balance limits    |
-| `validate securities` | Run configured security validations, e.g. prices up-to-date |
+| Command    | Description                                      |
+|------------|--------------------------------------------------|
+| `validate` | Run all validation checks on the portfolio data  |
+
+Use the repeatable `--rule` option to run only specific rule types:
+```bash
+pp-terminal --file depot.xml validate --rule price-staleness --rule balance-limit
+```
 
 This is a sample of validation rules that can be configured in the [configuration file](#configuration-file):
 ```toml
@@ -138,6 +147,25 @@ severity = "warning"
 type = "paid-tax-validation"
 severity = "warning"
 tolerance = 0.01
+```
+
+#### Built-in Validations
+
+The `negative-share-balance` security rule runs by default (severity `warning`, tolerance `0.001` shares) and flags securities
+whose share balance is negative in any securities account — an indicator of missing or inconsistent transactions, since short
+positions are not supported by Portfolio Performance. Configuring the rule yourself replaces the built-in default:
+
+```toml
+# Escalate to an error and adjust the tolerance (absolute share count)
+[[commands.validate.securities.rules]]
+type = "negative-share-balance"
+severity = "error"
+tolerance = 0.001
+
+# Or disable it entirely
+[[commands.validate.securities.rules]]
+type = "negative-share-balance"
+valid-months = []
 ```
 
 #### Temporal Validation
@@ -213,7 +241,7 @@ To view all available arguments you can always use the `--help` option.
 ### Configuration File
 To persist the CLI options you can pass a configuration file in [TOML format](https://toml.io/en/) with `pp-terminal --config=config.toml --help`.  
 
-The configuration file can also be provided as environment variable: `PP_TERMINAL_CONFIG=config.toml pp-terminal --help`
+If no `--config` is given, the tool automatically loads `$XDG_CONFIG_HOME/pp-terminal/config.toml` (defaulting to `~/.config/pp-terminal/config.toml`) when that file exists.
 
 The CLI options always overwrite the settings in the configuration file.
 
@@ -269,6 +297,29 @@ For more sophisticated samples take a look at the packaged commands in the `pp_t
 e.g. a good starting point is [view_accounts.py](https://github.com/ma4nn/pp-terminal/blob/master/pp_terminal/commands/view_accounts.py).
 
 The commands must be grouped by action, e.g. `view accounts` or `simulate share-sell`.
+
+Plugins can also contribute their own configuration section below `[commands]`. Register a [JSON Schema](https://json-schema.org/)
+(Draft 7) object fragment via the entry point `pp_terminal.config_schema`, named after the command path:
+
+```toml
+# pyproject.toml
+[project.entry-points."pp_terminal.config_schema"]
+"simulate.safe-withdrawal" = "my_plugin.config:CONFIG_SCHEMA"
+```
+
+```python
+# my_plugin/config.py
+CONFIG_SCHEMA = {
+    "type": "object",
+    "properties": {"years": {"type": "integer"}},
+    "additionalProperties": False,
+}
+```
+
+Users can then configure `[commands.simulate.safe-withdrawal]` in their config file, and the command reads the validated values
+via `get_command_config(config, 'simulate.safe-withdrawal.years')`. Redefining a section that _pp-terminal_ itself or another
+plugin already provides — or mounting inside one — is rejected. Entry point names have at most two segments (`<command>` or
+`<group>.<command>`), and fragments must be self-contained Draft-7 object schemas; `$ref` is not supported.
 
 The app uses [Typer](https://typer.tiangolo.com/) for composing the commands and [Rich](https://github.com/Textualize/rich)
 for nice console outputs. The Portfolio Performance XML file is read with [ppxml2db](https://github.com/pfalcon/ppxml2db) 

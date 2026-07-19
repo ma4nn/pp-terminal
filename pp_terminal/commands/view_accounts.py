@@ -27,14 +27,15 @@ import typer
 
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.output.column_utils import normalize_columns
-from pp_terminal.data.filters import clean_for_display, unstack_column_by_currency, pivot_taxonomy_columns
+from pp_terminal.data.filters import clean_for_display, unstack_column_by_currency, pivot_taxonomy_columns, retired_row_labels
 from pp_terminal.exceptions import InputError
 from pp_terminal.utils.helper import footer
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType
 from pp_terminal.output.table_decorator import TableOptions
-from pp_terminal.validation.engine import validate_accounts, ValidationResult
+from pp_terminal.commands.message_column import messages_renderer
+from pp_terminal.validation.engine import validate_accounts
 from pp_terminal.utils.config import get_command_config, Config
 
 app = typer.Typer()
@@ -100,6 +101,7 @@ def calculate_securities_accounts_sum(snapshot: PortfolioSnapshot) -> pd.DataFra
 def prepare_accounts_df(
     portfolio: Portfolio,
     config: Config,
+    output: OutputStrategy,
     by: datetime,
     account_type: AccountType | None = None
 ) -> pd.DataFrame:
@@ -120,9 +122,7 @@ def prepare_accounts_df(
 
     validation_results = validate_accounts(portfolio, snapshot, config)
     account_ids = df.index.get_level_values('accountId')
-    df['messages'] = account_ids.map(
-        lambda aid: validation_results.get(str(aid), ValidationResult.empty()).messages or ''
-    )
+    df['messages'] = account_ids.map(messages_renderer(validation_results, output))
 
     # currency exists both as index level (from balances) and column (from accounts); drop the column
     if 'currency' in df.columns:
@@ -151,7 +151,7 @@ def print_accounts(  # pylint: disable=too-many-locals
         config_fields = get_command_config(config, 'view.accounts.fields')
         fields = ','.join(config_fields) if config_fields else 'AccountId,Name,Type,Balance,Messages'
 
-    df = prepare_accounts_df(portfolio, config, by, type)
+    df = prepare_accounts_df(portfolio, config, output, by, type)
     snapshot = PortfolioSnapshot(portfolio, by)
 
     requested_columns = [col.strip() for col in fields.split(',')]
@@ -168,7 +168,14 @@ def print_accounts(  # pylint: disable=too-many-locals
         unstack_balance='balance' in selected_columns_preunstack and 'balance' in df.columns
     )
 
+    retired_ids = retired_row_labels(pd.concat([portfolio.deposit_accounts, portfolio.securities_accounts]))
+
     console.print(*output.result_table(
-        df, TableOptions(title="Balances on Accounts", caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}", show_index=True)
+        df, TableOptions(
+            title="Balances on Accounts",
+            caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
+            show_index=True,
+            dimmed_rows=retired_ids
+        )
     ))
     console.print(output.text(footer()), style="dim")

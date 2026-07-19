@@ -17,9 +17,12 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
+import copy
+import importlib.metadata
 import json
 import logging
 import os
+from functools import cache
 from pathlib import Path
 from typing import Any, Dict, cast
 
@@ -34,12 +37,22 @@ type Config = Dict[str, Any]
 _loaded_config: Config = {}
 
 
+def _default_config_path() -> Path:
+    xdg = os.environ.get('XDG_CONFIG_HOME')
+    base = Path(xdg) if xdg else Path.home() / '.config'
+    return base / 'pp-terminal' / 'config.toml'
+
+
 def get_tax_rate(config: Config) -> float:
     return float(config.get('tax', {}).get('rate', 26.375))
 
 
 def get_exempt_rate(config: Config) -> float:
     return float(config.get('tax', {}).get('exemption-rate', 30.0))
+
+
+def get_allowance(config: Config) -> float:
+    return float(config.get('tax', {}).get('allowance', 1000.0))
 
 
 def get_exempt_rate_attribute(config: Config) -> str | None:
@@ -66,6 +79,60 @@ def _load_schema() -> dict[str, Any]:
         return cast(dict[str, Any], json.load(f))
 
 
+def _contains_ref(node: Any) -> bool:
+    if isinstance(node, dict):
+        return '$ref' in node or any(_contains_ref(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_ref(value) for value in node)
+    return False
+
+
+def _mount_schema_fragment(commands_schema: dict[str, Any], command_path: str, fragment: dict[str, Any], group_nodes: set[int]) -> None:
+    node = commands_schema
+    segments = command_path.split('.')
+    for segment in segments[:-1]:
+        properties = node.setdefault('properties', {})
+        if segment not in properties:
+            properties[segment] = {'type': 'object', 'additionalProperties': False}
+            group_nodes.add(id(properties[segment]))
+        elif id(properties[segment]) not in group_nodes:
+            raise RuntimeError(f'cannot mount "commands.{command_path}" inside the already defined section "commands.{segment}"')
+        node = properties[segment]
+
+    properties = node.setdefault('properties', {})
+    if segments[-1] in properties:
+        raise RuntimeError(f'config schema section "commands.{command_path}" is already defined, refusing to override')
+
+    properties[segments[-1]] = fragment
+
+
+@cache
+def _merged_schema() -> dict[str, Any]:
+    schema = _load_schema()
+    commands_schema = schema['properties']['commands']
+    # core sections are traversable groups; plugin-mounted fragments are not
+    group_nodes = {id(node) for node in commands_schema.get('properties', {}).values()}
+
+    entry_points = sorted(importlib.metadata.entry_points(group="pp_terminal.config_schema"), key=lambda ep: ep.name)
+    for entry_point in entry_points:
+        try:
+            if len(entry_point.name.split('.')) > 2:
+                raise ValueError('entry point name must be "<command>" or "<group>.<command>"')
+            fragment = entry_point.load()
+            if not isinstance(fragment, dict):
+                raise TypeError('not a dict')
+            Draft7Validator.check_schema(fragment)
+            if _contains_ref(fragment):
+                raise ValueError('fragments must be self-contained, "$ref" is not supported')
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            log.error("failed to load config schema fragment %s, ignoring: %s", entry_point.name, e)
+            continue
+
+        _mount_schema_fragment(commands_schema, entry_point.name, copy.deepcopy(fragment), group_nodes)
+
+    return schema
+
+
 def validated_toml_loader(config_path: str) -> Config:
     """
     Load and validate TOML configuration file for use with typer-config.
@@ -74,16 +141,18 @@ def validated_toml_loader(config_path: str) -> Config:
     """
     global _loaded_config  # pylint: disable=global-statement
 
+    explicit_config = config_path != ''
     if config_path == '':
-        config_path = os.environ.get('PP_TERMINAL_CONFIG', '')
+        default_path = _default_config_path()
+        if default_path.is_file():
+            config_path = str(default_path)
 
     if config_path == '':
         return _loaded_config
 
     config = toml_loader(config_path)
 
-    schema = _load_schema()
-    validator = Draft7Validator(schema)
+    validator = Draft7Validator(_merged_schema())
 
     errors = sorted(validator.iter_errors(config), key=lambda e: e.path)
     if errors:
@@ -91,10 +160,14 @@ def validated_toml_loader(config_path: str) -> Config:
         for error in errors:
             path = '.'.join(str(p) for p in error.path) if error.path else 'root'
             error_messages.append(f"  {path}: {error.message}")
+        message = f"Config validation failed for {config_path}:\n" + '\n'.join(error_messages)
 
-        raise JsonSchemaValidationError(
-            f"Config validation failed for {config_path}:\n" + '\n'.join(error_messages)
-        )
+        if explicit_config:
+            raise JsonSchemaValidationError(message)
+
+        # a config the user did not explicitly request must never break every command
+        log.warning("Ignoring invalid config at default location:\n%s", message)
+        return _loaded_config
 
     log.debug("Loaded and validated config from file \"%s\"", config_path)
 

@@ -24,7 +24,7 @@ import pandera.pandas as pa
 from pandera.errors import SchemaError
 from pandera.typing import DataFrame
 
-from .schemas import AccountType, TransactionSchema, AccountSchema, SecuritySchema, SecurityPriceSchema, Account, \
+from .schemas import AccountType, TransactionSchema, AccountSchema, SecuritySchema, SecurityPriceSchema, \
     Security, Attribute, Taxonomy
 from ..exceptions import InputError
 
@@ -124,19 +124,6 @@ class Portfolio:  # pylint: disable=too-many-instance-attributes
     @property
     def taxonomy_assignments(self) -> pd.DataFrame:
         return self._taxonomy_assignments
-
-    @property
-    def taxonomy_names(self) -> list[str]:
-        return [t.name for t in self._taxonomies.values()]
-
-
-def get_securities_account_by_id(portfolio: Portfolio, account_id: str) -> Account:
-    if account_id not in portfolio.securities_accounts.index:
-        raise InputError(f"Securities account '{account_id}' not found in portfolio")
-
-    account_data = portfolio.securities_accounts.reset_index().set_index('accountId', drop=False).loc[account_id].to_dict()
-    account_data = {k: (None if pd.isna(v) else v) for k, v in account_data.items()}
-    return Account(**account_data)
 
 
 def get_security_by_id(portfolio: Portfolio, security_id: str) -> Security:

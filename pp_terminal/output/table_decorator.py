@@ -18,6 +18,7 @@
 """
 
 import re
+from dataclasses import dataclass, field
 from typing import Literal, Callable, Any
 
 import pandas as pd
@@ -58,6 +59,10 @@ def camel_case_to_title(column_name: str) -> str:
     return text
 
 
+def colorize(text: str, color: str) -> str:
+    return f'[{color}]{text}[/{color}]'
+
+
 def format_value(value: Any, column_name: str, row: pd.Series, attribute_types: dict[str, str] | None = None) -> str:
     if column_name.lower() == 'shares' and isinstance(value, float):
         return format_shares(value)
@@ -77,22 +82,15 @@ def format_value(value: Any, column_name: str, row: pd.Series, attribute_types: 
     return str(value)
 
 
+@dataclass
 class TableOptions:  # pylint: disable=too-few-public-methods
-    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-            self,
-            title: str = '',
-            caption: str = '',
-            show_index: bool = True,
-            show_total: bool = True,
-            footer_lines: int = 0,
-            value_formatter: Callable[[Any, str, pd.Series], str] = format_value
-    ) -> None:
-        self.title = title
-        self.caption = caption
-        self.show_index = show_index
-        self.show_total = show_total
-        self.footer_lines = footer_lines
-        self.value_formatter = value_formatter
+    title: str = ''
+    caption: str = ''
+    show_index: bool = True
+    show_total: bool = True
+    footer_lines: int = 0
+    value_formatter: Callable[[Any, str, pd.Series], str] = format_value
+    dimmed_rows: set[Any] = field(default_factory=set)
 
 
 class TableDecorator(Table):
@@ -148,8 +146,8 @@ class TableDecorator(Table):
 
             self.add_column(column_title, footer=footer_value if self.show_default_footer else '', justify=justify)
 
-        for row_data in self._prepare_rows(df):
-            self.add_row(*row_data)
+        for label, row_data in zip(df.index, self._prepare_rows(df)):
+            self.add_row(*row_data, style='dim' if label in self._options.dimmed_rows else None)
 
         if footer_rows is None:
             return self

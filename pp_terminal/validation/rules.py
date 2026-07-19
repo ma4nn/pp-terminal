@@ -25,6 +25,7 @@ import pandas as pd
 from pp_terminal.data.filters import filter_by_security
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.portfolio import Portfolio
+from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.validation.base import ValidationRule
 from pp_terminal.validation.vap_liquidity_rule import VapLiquidityRule
 from pp_terminal.validation.paid_tax_validation_rule import PaidTaxValidationRule
@@ -140,6 +141,48 @@ class CostBasisLimitRule(ValidationRule):
         return False, None
 
 
+class NegativeShareBalanceRule(ValidationRule):
+    """Flags securities with a negative share balance in any account, which indicates
+    missing or inconsistent transactions (e.g. sells exceeding buys) since short positions
+    are not supported by Portfolio Performance."""
+
+    @classmethod
+    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: dict[str, Any]) -> dict[str, Any]:
+        # share counts are currency-independent, so net out forex/native transaction legs
+        balances = snapshot.share_balances.groupby(['accountId', 'securityId']).sum()
+        return {
+            'negative_share_balances': balances[balances < 0],
+            'account_names': portfolio.securities_accounts['name'],
+        }
+
+    def validate(self, entity: pd.Series, entity_id: str, context: dict[str, Any]) -> tuple[bool, str | None]:
+        is_error, message = super().validate(entity, entity_id, context)
+        if not self._should_apply():
+            return is_error, message
+
+        balances = context['negative_share_balances']
+        negative_balances = balances[
+            (balances.index.get_level_values('securityId') == entity_id) & (balances < -self.tolerance)
+        ]
+        if negative_balances.empty:
+            return False, None
+
+        account_names = context['account_names']
+        details = ', '.join(
+            f'{share_count:.2f} in "{account_names.get(account_id, account_id)}"'
+            for (account_id, _), share_count in negative_balances.items()
+        )
+        message = f'has negative share balance ({details}), transactions seem to be missing or inconsistent'
+        return self.is_error(), message
+
+
+def create_built_in_securities_rules() -> list[ValidationRule]:
+    """Data-integrity rules that run by default; a user-configured rule of the same type replaces the built-in one."""
+    return [
+        NegativeShareBalanceRule(rule_type='negative-share-balance', value=None, severity='warning', tolerance=0.001),
+    ]
+
+
 _RULE_TYPES = {
     'balance-limit': BalanceLimitRule,
     'balance-limit-from-attribute': BalanceLimitRule,
@@ -151,7 +194,12 @@ _RULE_TYPES = {
     'cost-basis-limit-from-attribute': CostBasisLimitRule,
     'vap-liquidity': VapLiquidityRule,
     'paid-tax-validation': PaidTaxValidationRule,
+    'negative-share-balance': NegativeShareBalanceRule,
 }
+
+
+def known_rule_types() -> set[str]:
+    return set(_RULE_TYPES)
 
 
 def create_rule(rule_config: dict[str, Any]) -> ValidationRule:

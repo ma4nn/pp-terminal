@@ -28,7 +28,7 @@ import pandas as pd
 import typer
 from mcp.server.fastmcp import FastMCP
 
-from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df
+from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df, summarize_sell_plan
 from pp_terminal.commands.view_accounts import prepare_accounts_df
 from pp_terminal.commands.view_securities import prepare_securities_df
 from pp_terminal.commands.view_taxonomies import prepare_taxonomies_df
@@ -38,6 +38,7 @@ from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import AccountType
 from pp_terminal.data.pp_portfolio_builder import CachedPpPortfolioBuilder
 from pp_terminal.exceptions import InputError
+from pp_terminal.output.strategy import JsonOutputStrategy
 from pp_terminal.utils.cache import checksum
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.vap import calculate_vap, get_base_rate_for_year, add_account_balances
@@ -68,7 +69,7 @@ All dates are ISO format strings (e.g. '2025-06-15'). All monetary amounts are i
 native currency. Tax rates are in percent (e.g. 26.375 for German Abgeltungssteuer + Soli).
 """
 
-_SUMMARY_COLUMNS = ['securityName', 'currency', 'shares', 'salePrice', 'costBasis',
+_SUMMARY_COLUMNS = ['securityName', 'account', 'currency', 'shares', 'salePrice', 'costBasis',
                     'fees', 'grossProceeds', 'capitalGain', 'deemedIncome',
                     'taxableGain', 'totalTax', 'netProceeds']
 
@@ -109,6 +110,7 @@ def _resolve_security(portfolio: Portfolio, security: str) -> str:
 
 def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: disable=too-many-locals,too-many-statements
     builder = CachedPpPortfolioBuilder(config=config)
+    output = JsonOutputStrategy()  # plain (icon-free) validation messages for MCP records
     state: dict[str, Any] = {
         'portfolio': builder.construct(file_path),
         'checksum': checksum(file_path),
@@ -168,7 +170,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """
         portfolio = _ensure_fresh_portfolio()
         by_date = datetime.fromisoformat(date) if date else datetime.now()
-        df = prepare_securities_df(portfolio, config, by_date, active_only, in_stock_only)
+        df = prepare_securities_df(portfolio, config, output, by_date, active_only, in_stock_only)
         return _clean_records(df)
 
     @mcp.tool()
@@ -188,7 +190,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         portfolio = _ensure_fresh_portfolio()
         by_date = datetime.fromisoformat(date) if date else datetime.now()
         parsed_type = AccountType[account_type] if account_type else None
-        df = prepare_accounts_df(portfolio, config, by_date, parsed_type)
+        df = prepare_accounts_df(portfolio, config, output, by_date, parsed_type)
         return _clean_records(df.reset_index())
 
     @mcp.tool()
@@ -241,7 +243,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
     ) -> list[dict[str, Any]]:
         """List all FIFO purchase lots with projected tax on hypothetical sale.
 
-        Each row is one purchase lot (FIFO order) showing: securityName, purchase date, shares,
+        Each row is one purchase lot (FIFO order) showing: securityName, isin, account, purchase date, shares,
         currency, purchasePrice, costBasis, fees, salePrice, grossProceeds, capitalGain,
         deemedIncome (Vorabpauschale), taxableGain, totalTax, netProceeds.
 
@@ -271,8 +273,8 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """Simulate selling all shares and return a per-security summary with totals.
 
         Use this to answer questions like 'what if I sell everything?' or 'how much tax on my portfolio?'.
-        Each row is one security showing: securityName, currency, shares, salePrice, costBasis,
-        fees, grossProceeds, capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax,
+        Each row is one security per account showing: securityName, account, currency, shares, salePrice,
+        costBasis, fees, grossProceeds, capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax,
         netProceeds. For individual FIFO lot detail, use query_fifo_lots instead.
         To target a specific net amount (e.g. 'I need 1000 EUR after tax'), use simulate_sell_target_net instead.
 
@@ -291,13 +293,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         if lots.empty:
             return []
 
-        sum_cols = ['shares', 'costBasis', 'fees', 'grossProceeds', 'capitalGain',
-                    'deemedIncome', 'taxableGain', 'totalTax', 'netProceeds']
-        agg = {col: 'sum' for col in sum_cols}
-        agg['salePrice'] = 'first'
-
-        summary = lots.groupby(['securityName', 'currency'], sort=False).agg(agg).reset_index()
-        return _clean_records(summary[_SUMMARY_COLUMNS])
+        return _clean_records(summarize_sell_plan(lots)[_SUMMARY_COLUMNS])
 
     @mcp.tool()
     def simulate_sell_shares(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -336,12 +332,14 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         return _clean_records(result) if not result.empty else []
 
     @mcp.tool()
-    def simulate_sell_target_net(
+    def simulate_sell_target_net(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         target_net: float,
         security: str | None = None,
         account_id: str | None = None,
         date: str | None = None,
         tax_rate: float | None = None,
+        taxonomy: str | None = None,
+        min_amount: float | None = None,
     ) -> list[dict[str, Any]]:
         """Find the shares to sell to achieve a target net proceeds amount with minimal taxes.
 
@@ -349,7 +347,13 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         'which securities to sell to get 5000 EUR with minimal taxes?', or
         'how to realize X EUR net from my portfolio?'.
         Selects lots across securities/accounts to minimize total tax while reaching the target.
-        Uses latest known prices. Each row is one FIFO lot showing: securityName, purchase date,
+        Pass a taxonomy to instead preserve the current asset allocation while reaching the target:
+        each asset class of that Portfolio Performance taxonomy keeps its weight and the sale
+        consolidates within a class onto the most tax-efficient securities (so redundant holdings of
+        the same class need not all be sold). Answers 'get X EUR net without changing my allocation'.
+        With a taxonomy, pass min_amount to skip asset classes whose gross sale would fall below it
+        (avoids dust trades); the remaining classes still reach the full target.
+        Uses latest known prices. Each row is one FIFO lot showing: securityName, isin, purchase date,
         shares to sell, currency, purchasePrice, costBasis, fees, salePrice, grossProceeds,
         capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax, netProceeds.
 
@@ -359,6 +363,8 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
             account_id: Restrict to a single securities account (defaults to all accounts)
             date: Sale date as ISO string, e.g. '2025-06-15' (defaults to today)
             tax_rate: Personal tax rate in percent (defaults to config or 26.375%)
+            taxonomy: Preserve the current asset allocation using this taxonomy's classes (defaults to pure tax minimization)
+            min_amount: Minimum gross sale per asset class; smaller classes are skipped (requires taxonomy)
         """
         portfolio = _ensure_fresh_portfolio()
         sell_date, effective_tax_rate = _sell_defaults(date, tax_rate)
@@ -367,7 +373,8 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
 
         result = prepare_share_sell_df(
             portfolio, config, sell_date, effective_tax_rate,
-            security_id, account_id, target_net=target_net, tax_csv_data=tax_csv_data
+            security_id, account_id, target_net=target_net,
+            taxonomy=taxonomy, min_amount=min_amount, tax_csv_data=tax_csv_data
         )
         return _clean_records(result) if not result.empty else []
 

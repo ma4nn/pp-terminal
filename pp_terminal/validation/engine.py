@@ -26,8 +26,8 @@ from pp_terminal.data.filters import filter_not_retired
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.utils.config import get_command_config
-from .base import ValidationRule
-from .rules import create_rule, get_applicable_rules
+from pp_terminal.validation.base import ValidationRule
+from pp_terminal.validation.rules import create_built_in_securities_rules, create_rule, get_applicable_rules
 
 
 @dataclass
@@ -37,21 +37,14 @@ class ValidationResult:
     violations: list[tuple[ValidationRule, str]]  # (rule, message)
 
     @property
+    def violation_messages(self) -> list[str]:
+        """Returns the plain violation messages (no presentation)."""
+        return [msg for _, msg in self.violations]
+
+    @property
     def messages(self) -> str:
-        """Returns icon-prefixed, semicolon-separated violation messages."""
-        if not self.violations:
-            return ''
-
-        icon = self._get_icon()
-        msgs = '; '.join(msg for _, msg in self.violations)
-        return f'{icon} {msgs}' if icon else msgs
-
-    def _get_icon(self) -> str:
-        """Returns appropriate icon based on severity."""
-        if not self.violations:
-            return ''
-        has_error = any(rule.is_error() for rule, _ in self.violations)
-        return '❌' if has_error else '⚠️'
+        """Returns semicolon-separated violation messages (plain, no icons)."""
+        return '; '.join(self.violation_messages)
 
     @property
     def has_errors(self) -> bool:
@@ -62,6 +55,22 @@ class ValidationResult:
     def empty(cls, entity_id: str = '') -> 'ValidationResult':
         """Returns empty result with no violations."""
         return cls(entity_id=entity_id, violations=[])
+
+
+def configured_rule_types(config: dict[str, Any]) -> set[str]:
+    user_types = {
+        rule_config['type']
+        for config_key in ('validate.accounts.rules', 'validate.securities.rules')
+        for rule_config in get_command_config(config, config_key, [])
+    }
+    return user_types | {rule.rule_type for rule in create_built_in_securities_rules()}
+
+
+def _filter_rules(rules: list[ValidationRule], rule_types: set[str] | None) -> list[ValidationRule]:
+    if rule_types is None:
+        return rules
+
+    return [rule for rule in rules if rule.rule_type in rule_types]
 
 
 def _validate_entity(
@@ -84,10 +93,12 @@ def _validate_entity(
 def validate_accounts(
     portfolio: Portfolio,
     snapshot: PortfolioSnapshot,
-    config: dict[str, Any]
+    config: dict[str, Any],
+    rule_types: set[str] | None = None
 ) -> dict[str, ValidationResult]:
     """Validates all deposit accounts. Returns dict mapping account_id -> ValidationResult."""
     rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.accounts.rules', [])]
+    rules = _filter_rules(rules, rule_types)
 
     total_balances = snapshot.balances.groupby('accountId').sum()
     total_balances.name = 'TotalBalance'
@@ -119,9 +130,14 @@ def validate_accounts(
 
 def validate_securities(
     portfolio: Portfolio,
-    config: dict[str, Any]
+    snapshot: PortfolioSnapshot,
+    config: dict[str, Any],
+    rule_types: set[str] | None = None
 ) -> dict[str, ValidationResult]:
-    rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.securities.rules', [])]
+    user_rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.securities.rules', [])]
+    configured_types = {rule.rule_type for rule in user_rules}
+    rules = [rule for rule in create_built_in_securities_rules() if rule.rule_type not in configured_types] + user_rules
+    rules = _filter_rules(rules, rule_types)
 
     latest_prices = portfolio.prices.groupby(['securityId']).tail(1)
 
@@ -138,11 +154,12 @@ def validate_securities(
 
     base_context = {
         'portfolio': portfolio,
+        'snapshot': snapshot,
         'config': config,
     }
 
     for rule in rules:
-        base_context.update(rule.__class__.provide_context(portfolio, config))
+        base_context.update(rule.__class__.provide_context(portfolio, snapshot, config))
 
     results = {}
     for security_id, security in securities_with_prices.iterrows():

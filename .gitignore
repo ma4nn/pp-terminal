@@ -12,3 +12,4 @@ tests/fixtures/*.backup.xml
 tests/fixtures/*.backup-after-open.xml
 .*.pp-terminal.db
 mutants/
+.claude/settings.local.json

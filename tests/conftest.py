@@ -19,6 +19,7 @@
 
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -41,8 +42,11 @@ EXEMPT_RATE_CONFIG = {
 
 
 @pytest.fixture(autouse=True)
-def _reset_config(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(config_module, '_loaded_config', {})
+    # point XDG at an empty dir so a developer's real ~/.config/pp-terminal/config.toml
+    # can never leak into tests that don't pass --config
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
 
 
 @pytest.fixture(autouse=True)

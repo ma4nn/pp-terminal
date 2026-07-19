@@ -254,11 +254,7 @@ class TestMinTaxStrategy:
         """Lots where netProceedsPerShare <= 0 should be skipped."""
         portfolio = _make_portfolio(
             transactions_data=[
-                # sec-1: bought at 100, sell at 100 with very high tax scenario doesn't exist naturally.
-                # Instead: sec-1 bought at 200, sell at 100 -> loss, but netProceeds = grossProceeds - 0 tax = positive
-                # Actually netProceedsPerShare = netProceeds/shares which is always gross - tax / shares.
-                # For nps <= 0 we need grossProceeds <= totalTax which can't happen with standard tax rates.
-                # So test with a security where sale price is 0 -> grossProceeds = 0 -> nps = 0
+                # sec-1 sells at price 0 -> grossProceeds = 0 -> netProceedsPerShare = 0
                 [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 10000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
                 [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 5000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
             ],

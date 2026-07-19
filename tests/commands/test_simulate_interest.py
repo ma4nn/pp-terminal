@@ -43,30 +43,14 @@ def test_empty_portfolio() -> None:
     assert result.empty
 
 
-def test_no_deposit_accounts(sample_accounts: pd.DataFrame, sample_transactions: pd.DataFrame) -> None:
+def test_no_transactions_in_period(sample_accounts: pd.DataFrame, sample_transactions: pd.DataFrame) -> None:
     portfolio = Portfolio(accounts=sample_accounts, transactions=sample_transactions)
     snapshot_begin = PortfolioSnapshot(portfolio, datetime(2022, 1, 2))
     snapshot_end = PortfolioSnapshot(portfolio, datetime(2022, 12, 31))
 
     result = calculate_interest(snapshot_begin, snapshot_end, 2.3)
 
-    expected_df = InterestResultSchema.empty()
-
-    assert result is not None
-    assert_frame_equal(expected_df, result)
-
-
-def test_calculate_interest(sample_accounts: pd.DataFrame, sample_transactions: pd.DataFrame) -> None:
-    portfolio = Portfolio(accounts=sample_accounts, transactions=sample_transactions)
-    snapshot_begin = PortfolioSnapshot(portfolio, datetime(2022, 1, 2))
-    snapshot_end = PortfolioSnapshot(portfolio, datetime(2022, 12, 31))
-
-    result = calculate_interest(snapshot_begin, snapshot_end, 2.3)
-
-    expected_df = InterestResultSchema.empty()
-
-    assert result is not None
-    assert_frame_equal(expected_df, result)
+    assert_frame_equal(InterestResultSchema.empty(), result)
 
 
 def test_kommer(request: TopRequest) -> None:

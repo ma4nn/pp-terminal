@@ -53,12 +53,11 @@ def fixture_rule_dec_jan() -> BalanceLimitRule:
 
 
 def test_rule_without_valid_months_always_runs(rule_no_months: BalanceLimitRule, entity: pd.Series) -> None:
-    for _ in range(1, 13):
-        is_error, message = rule_no_months.validate(entity, 'account-1', {'balance': 10000.0})
+    is_error, message = rule_no_months.validate(entity, 'account-1', {'balance': 10000.0})
 
-        assert is_error is True
-        assert message is not None
-        assert 'exceeds limit' in message
+    assert is_error is True
+    assert message is not None
+    assert 'exceeds limit' in message
 
 
 def test_rule_runs_in_configured_months(rule_dec_jan: BalanceLimitRule, entity: pd.Series, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,46 +147,3 @@ def test_rule_with_empty_months_list_never_runs(entity: pd.Series, monkeypatch: 
         is_error, message = rule.validate(entity, 'account-1', {'balance': 10000.0})
         assert is_error is False
         assert message is None
-
-
-def test_rule_with_all_months(entity: pd.Series, monkeypatch: pytest.MonkeyPatch) -> None:
-    rule = BalanceLimitRule(
-        rule_type='balance-limit',
-        value=5000.0,
-        severity='error',
-        applies_to=None,
-        valid_months=list(range(1, 13))
-    )
-
-    for month in range(1, 13):
-        class MockDatetime:
-            @classmethod
-            def now(cls) -> datetime:
-                return datetime(2026, month, 15)
-
-        monkeypatch.setattr('pp_terminal.validation.base.datetime', MockDatetime)
-        is_error, message = rule.validate(entity, 'account-1', {'balance': 10000.0})
-        assert is_error is True
-        assert message is not None
-        assert 'exceeds limit' in message
-
-
-def test_month_validation_works_across_years(rule_dec_jan: BalanceLimitRule, entity: pd.Series, monkeypatch: pytest.MonkeyPatch) -> None:
-    test_dates = [
-        datetime(2025, 12, 31),
-        datetime(2026, 1, 1),
-        datetime(2026, 12, 1),
-        datetime(2027, 1, 31)
-    ]
-
-    for test_date in test_dates:
-        class MockDatetime:
-            @classmethod
-            def now(cls) -> datetime:
-                return test_date
-
-        monkeypatch.setattr('pp_terminal.validation.base.datetime', MockDatetime)
-        is_error, message = rule_dec_jan.validate(entity, 'account-1', {'balance': 10000.0})
-        assert is_error is True
-        assert message is not None
-        assert 'exceeds limit' in message

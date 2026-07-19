@@ -109,20 +109,20 @@ def _calculate_min_shares(snapshot_begin: PortfolioSnapshot, snapshot_end: Portf
             min_position = min(begin_count, cumulative.min())
             result_dict[(account_id, security_id, currency)] = max(0, min_position)
 
-    if not result_dict:
-        return None
-
     index = pd.MultiIndex.from_tuples(result_dict.keys(), names=['accountId', 'securityId', 'currency'])
     return pd.Series(list(result_dict.values()), index=index, name='MinShares')
 
 
-def _calculate_prorata_shares_for_inyear_buys(snapshot_end: PortfolioSnapshot) -> pd.Series | None:
+def _calculate_prorata_shares_for_inyear_buys(snapshot_begin: PortfolioSnapshot, snapshot_end: PortfolioSnapshot) -> pd.Series | None:
     """Calculate pro-rata shares for securities bought during the tax year."""
     transactions = snapshot_end.securities_account_transactions
 
     transactions_inyear = transactions[transactions.index.get_level_values('date').year == snapshot_end.date.year] if not transactions.index.get_level_values('date').empty else None
     if transactions_inyear is None:
         return pd.Series([], name='Amount', index=pd.MultiIndex.from_tuples([], names=['accountId', 'securityId']), dtype='float64')
+
+    # buys up to the begin snapshot date are already fully counted in the begin shares
+    transactions_inyear = transactions_inyear[transactions_inyear.index.get_level_values('date') > snapshot_begin.date]
 
     transactions_inyear = transactions_inyear.pipe(filter_by_type, transaction_types=[TransactionType.BUY, TransactionType.DELIVERY_INBOUND])
     transactions_inyear['months_held'] = snapshot_end.date.month - transactions_inyear.index.get_level_values('date').month + 1
@@ -140,7 +140,7 @@ def _calculate_effective_shares(
     if effective_begin_shares is None or effective_begin_shares.empty:
         effective_begin_shares = snapshot_period_begin.shares.copy()
 
-    pro_rata_shares = _calculate_prorata_shares_for_inyear_buys(snapshot_period_end)
+    pro_rata_shares = _calculate_prorata_shares_for_inyear_buys(snapshot_period_begin, snapshot_period_end)
     if pro_rata_shares is not None:
         effective_begin_shares = effective_begin_shares.add(pro_rata_shares, fill_value=0)
 
@@ -190,9 +190,6 @@ def calculate_vap(  # pylint: disable=too-many-locals,too-many-arguments,too-man
 
     if not vap.empty:
         vap = vap.unstack(level='accountId')
-        # Only extract from tuple if it's a MultiIndex
-        if isinstance(vap.columns, pd.MultiIndex):
-            vap.columns = [col[1] if len(col) > 1 else col[0] for col in vap.columns]
 
     vap = vap.pipe(drop_empty_values)
     if vap.empty:

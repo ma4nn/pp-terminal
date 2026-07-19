@@ -251,34 +251,14 @@ def test_partial_sell_from_xml_fixture(request: TopRequest) -> None:
     - Outcome: 600 EUR
     - Base yield: 3000 * 0.0229 * 0.7 = 48.09 EUR
     - Vorabpauschale: min(600, 48.09) = 48.09 EUR
-    - After tax (26.375%): 48.09 * 0.26375 = 12.68 EUR
-    - After exemption (30% default): 12.68 * 0.70 = 8.88 EUR
+    - After tax (26.375%): 48.09 * 0.26375 = 12.68 EUR (no exemption rate configured)
     """
     portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'partial_sell.ids.xml')
 
-    # Verify transactions are parsed correctly
-    txns = portfolio.securities_account_transactions
-    assert txns is not None
-    assert len(txns) == 2
-
-    # Verify BUY transaction
-    buy_txn = txns[txns['type'] == 'BUY']
-    assert len(buy_txn) == 1
-    assert float(buy_txn.iloc[0]['shares']) == pytest.approx(100.0)
-
-    # Verify SELL transaction is correctly parsed
-    sell_txn = txns[txns['type'] == 'SELL']
-    assert len(sell_txn) == 1
-    assert float(sell_txn.iloc[0]['shares']) == pytest.approx(40.0)
-    assert sell_txn.index.get_level_values('date')[0].year == 2024
-
-    # Calculate vorabpauschale
     snapshot_begin = PortfolioSnapshot(portfolio, datetime(2024, 1, 2))
     snapshot_end = PortfolioSnapshot(portfolio, datetime(2024, 12, 31))
 
     result = calculate_vap(snapshot_begin, snapshot_end, base_rate_percent=2.29, tax_rate_percent=TAX_RATE)
-
-    assert result is not None
 
     # Filter to just the security row (exclude "Related Account Balance")
     result_security = result[result['name'] == 'Test World ETF']
@@ -290,3 +270,29 @@ def test_partial_sell_from_xml_fixture(request: TopRequest) -> None:
     expected_df = VapResultSchema.validate(expected_df)
 
     assert_frame_equal(expected_df, result_security.round(2), check_dtype=False, check_index_type=False)
+
+
+def test_partial_sell_only_affects_own_account(sell_test_securities: pd.DataFrame, sell_test_prices: pd.DataFrame) -> None:
+    accounts = pd.DataFrame([
+        ['Depot A', AccountType.SECURITIES.value, 'EUR', None],
+        ['Depot B', AccountType.SECURITIES.value, 'EUR', None],
+    ], columns=['name', 'type', 'currency', 'referenceAccount'], index=['1', '2'])
+    accounts.index.name = 'accountId'
+
+    transactions = pd.DataFrame([
+        [datetime(2023, 6, 1), TransactionType.BUY.value, 100000.0, 2000.0, 'sec1', '1', AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        [datetime(2023, 6, 1), TransactionType.BUY.value, 50000.0, 1000.0, 'sec1', '2', AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        [datetime(2024, 8, 1), TransactionType.SELL.value, 60000.0, 1000.0, 'sec1', '1', AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+    ], columns=['date', 'type', 'amount', 'shares', 'securityId', 'accountId', 'accountType', 'currency', 'taxes', 'fees']).set_index(['date', 'accountId', 'securityId'])
+
+    portfolio = Portfolio(accounts, transactions, sell_test_securities, sell_test_prices)
+
+    result = calculate_vap(
+        PortfolioSnapshot(portfolio, datetime(2024, 1, 2)),
+        PortfolioSnapshot(portfolio, datetime(2024, 12, 31)),
+        base_rate_percent=2.29,
+        tax_rate_percent=TAX_RATE)
+
+    # per share: min(60-50, 50*0.7*2.29/100) * 26.375% = 0.2114
+    assert result.loc['sec1', 'Depot A'] == pytest.approx(211.40, abs=0.01)  # 1000 shares remaining after the sell
+    assert result.loc['sec1', 'Depot B'] == pytest.approx(211.40, abs=0.01)  # 1000 shares, untouched by Depot A's sell

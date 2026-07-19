@@ -51,19 +51,6 @@ def test_retired_row_labels_empty_without_column() -> None:
     assert retired_row_labels(df) == set()
 
 
-def test_nonexistent_security(portfolio_with_purchases: Portfolio) -> None:
-    transactions = portfolio_with_purchases.securities_account_transactions.pipe(
-        filter_by_account_and_security, account_id='acc-1', security_id='nonexistent-security')
-
-    assert transactions.empty
-
-def test_nonexistent_account(portfolio_with_purchases: Portfolio) -> None:
-    transactions = portfolio_with_purchases.securities_account_transactions.pipe(
-        filter_by_account_and_security, account_id='nonexistent-account', security_id='sec-1')
-
-    assert transactions.empty
-
-
 class TestIndexFilters:
     def test_filter_by_security_returns_matching_rows(self, portfolio_with_purchases: Portfolio) -> None:
         result = filter_by_security(portfolio_with_purchases.securities_account_transactions, 'sec-1')

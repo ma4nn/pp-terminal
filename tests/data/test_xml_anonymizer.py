@@ -18,10 +18,13 @@
 """
 
 # pylint: disable=c-extension-no-member
+import logging
 from pathlib import Path
 
 import lxml.etree as ET
+import pytest
 
+from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
 from pp_terminal.data.xml_anonymizer import XmlAnonymizer
 
 
@@ -381,3 +384,195 @@ def test_attribute_uuid_not_in_xml_no_error(tmp_path: Path) -> None:
     anonymizer = XmlAnonymizer(seed=42, config=config)
     # Should not raise an error, just silently doesn't match anything
     anonymizer.anonymize_file(input_file, output_file)
+
+
+def test_shares_are_randomized(tmp_path: Path) -> None:
+    xml_content = """<client id="1">
+  <account id="2">
+    <name>Test</name>
+    <transactions>
+      <account-transaction>
+        <shares>2400000000</shares>
+      </account-transaction>
+    </transactions>
+  </account>
+</client>"""
+
+    input_file = tmp_path / "test_input.xml"
+    output_file = tmp_path / "test_output.xml"
+    input_file.write_text(xml_content)
+
+    anonymizer = XmlAnonymizer(seed=42, amount_factor_range=(0.5, 2.0))
+    anonymizer.anonymize_file(input_file, output_file)
+
+    tree = ET.parse(str(output_file))
+    new_shares = int(tree.find('.//shares').text)
+
+    assert 1200000000 <= new_shares <= 4800000000, f"Shares {new_shares} out of expected range"
+    assert new_shares != 2400000000, "Shares should be changed"
+
+
+def test_unit_amount_attribute_anonymized(tmp_path: Path) -> None:
+    xml_content = """<client id="1">
+  <account id="2">
+    <name>Test</name>
+    <transactions>
+      <account-transaction>
+        <units>
+          <unit type="TAX">
+            <amount currency="EUR" amount="99500"/>
+          </unit>
+        </units>
+      </account-transaction>
+    </transactions>
+  </account>
+</client>"""
+
+    input_file = tmp_path / "test_input.xml"
+    output_file = tmp_path / "test_output.xml"
+    input_file.write_text(xml_content)
+
+    anonymizer = XmlAnonymizer(seed=42, amount_factor_range=(2.0, 3.0))
+    anonymizer.anonymize_file(input_file, output_file)
+
+    tree = ET.parse(str(output_file))
+    amount = tree.find('.//unit/amount')
+
+    assert amount.get('amount') != "99500", "Amount attribute should be changed"
+    assert amount.get('currency') == "EUR", "Currency should be unchanged"
+
+
+def test_forex_amount_attribute_anonymized(tmp_path: Path) -> None:
+    """Foreign currency amounts in forex elements must not leak into the output."""
+    xml_content = """<client id="1">
+  <account id="2">
+    <name>Test</name>
+    <transactions>
+      <account-transaction>
+        <units>
+          <unit type="GROSS_VALUE">
+            <amount currency="EUR" amount="123456"/>
+            <forex currency="USD" amount="654321"/>
+            <exchangeRate>0.89</exchangeRate>
+          </unit>
+        </units>
+      </account-transaction>
+    </transactions>
+  </account>
+</client>"""
+
+    input_file = tmp_path / "test_input.xml"
+    output_file = tmp_path / "test_output.xml"
+    input_file.write_text(xml_content)
+
+    anonymizer = XmlAnonymizer(seed=42, amount_factor_range=(2.0, 3.0))
+    anonymizer.anonymize_file(input_file, output_file)
+
+    tree = ET.parse(str(output_file))
+    forex = tree.find('.//forex')
+
+    assert forex.get('amount') != "654321", "Forex amount attribute should be changed"
+    assert forex.get('currency') == "USD", "Forex currency should be unchanged"
+    assert tree.find('.//exchangeRate').text == "0.89", "Exchange rate should be unchanged"
+
+
+def test_source_filename_anonymized(tmp_path: Path) -> None:
+    xml_content = """<client id="1">
+  <account id="2">
+    <name>Test</name>
+    <transactions>
+      <account-transaction>
+        <source>Kontoauszug_DE12345678901234567890.pdf</source>
+      </account-transaction>
+    </transactions>
+  </account>
+</client>"""
+
+    input_file = tmp_path / "test_input.xml"
+    output_file = tmp_path / "test_output.xml"
+    input_file.write_text(xml_content)
+
+    anonymizer = XmlAnonymizer(seed=42)
+    anonymizer.anonymize_file(input_file, output_file)
+
+    tree = ET.parse(str(output_file))
+    source = tree.find('.//source').text
+
+    assert source != "Kontoauszug_DE12345678901234567890.pdf", "Source filename should be changed"
+    assert "DE12345678901234567890" not in source, "Account number should not survive"
+
+
+def test_unparseable_values_kept_with_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Unparseable dates and amounts pass through unchanged but emit a warning."""
+    xml_content = """<client id="1">
+  <account id="2">
+    <name>Test</name>
+    <transactions>
+      <account-transaction>
+        <date>not-a-date</date>
+        <amount>N/A</amount>
+      </account-transaction>
+    </transactions>
+  </account>
+</client>"""
+
+    input_file = tmp_path / "test_input.xml"
+    output_file = tmp_path / "test_output.xml"
+    input_file.write_text(xml_content)
+
+    anonymizer = XmlAnonymizer(seed=42)
+    with caplog.at_level(logging.WARNING):
+        anonymizer.anonymize_file(input_file, output_file)
+
+    tree = ET.parse(str(output_file))
+
+    assert tree.find('.//date').text == "not-a-date", "Unparseable date should pass through"
+    assert tree.find('.//amount').text == "N/A", "Unparseable amount should pass through"
+    assert "not-a-date" in caplog.text, "Warning for unparseable date expected"
+    assert "N/A" in caplog.text, "Warning for unparseable amount expected"
+
+
+def test_fixture_names_are_anonymized(request: pytest.FixtureRequest, tmp_path: Path) -> None:
+    """No account or portfolio name from the fixture survives anonymization."""
+    fixture = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+    output_file = tmp_path / "anonymized.xml"
+
+    XmlAnonymizer(seed=42).anonymize_file(fixture, output_file)
+
+    content = output_file.read_text()
+    for original_name in ('Wertpapierkonto', 'Tagesgeld', 'Fremdwährungskonto', 'Kryptowährung', '>Depot<'):
+        assert original_name not in content, f"Name '{original_name}' should not survive"
+
+
+def test_fixture_amounts_and_shares_are_anonymized(request: pytest.FixtureRequest, tmp_path: Path) -> None:
+    """No amount or shares value from the fixture survives anonymization."""
+    fixture = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+    output_file = tmp_path / "anonymized.xml"
+
+    XmlAnonymizer(seed=42, amount_factor_range=(2.0, 3.0)).anonymize_file(fixture, output_file)
+
+    original = ET.parse(str(fixture))
+    anonymized = ET.parse(str(output_file))
+    for tag in ('amount', 'shares'):
+        original_values = [(element.text, element.get('amount')) for element in original.iter(tag)]
+        anonymized_values = [(element.text, element.get('amount')) for element in anonymized.iter(tag)]
+
+        assert len(original_values) > 0, f"Fixture should contain {tag} elements"
+        assert len(original_values) == len(anonymized_values), f"Number of {tag} elements should be unchanged"
+        for (original_text, original_attribute), (anonymized_text, anonymized_attribute) in zip(original_values, anonymized_values):
+            if original_text and original_text != '0':
+                assert anonymized_text != original_text, f"Value of {tag} element should be changed"
+            if original_attribute and original_attribute != '0':
+                assert anonymized_attribute != original_attribute, f"Amount attribute of {tag} element should be changed"
+
+
+def test_anonymized_fixture_loads_into_portfolio(request: pytest.FixtureRequest, tmp_path: Path) -> None:
+    fixture = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+    output_file = tmp_path / "anonymized.xml"
+
+    XmlAnonymizer(seed=42).anonymize_file(fixture, output_file)
+
+    portfolio = PpPortfolioBuilder().construct(output_file)
+
+    assert not portfolio.securities_accounts.empty, "Anonymized file should still contain securities accounts"
+    assert not portfolio.securities_account_transactions.empty, "Anonymized file should still contain transactions"

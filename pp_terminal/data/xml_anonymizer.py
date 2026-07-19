@@ -96,8 +96,9 @@ class XmlAnonymizer:  # pylint: disable=too-many-instance-attributes,too-few-pub
             element.text = self.faker.sentence() if element.text else None
         elif tag == 'date':
             element.text = self._shift_date(element.text)
-        elif tag == 'amount':
-            element.text = self._randomize_amount(element.text, element)
+        elif tag in ('amount', 'forex'):
+            if element.text:
+                element.text = self._randomize_amount(element.text, element)
             # Also handle amount attribute for multi-currency amounts
             if 'amount' in element.attrib:
                 element.attrib['amount'] = self._randomize_amount(
@@ -159,6 +160,7 @@ class XmlAnonymizer:  # pylint: disable=too-many-instance-attributes,too-few-pub
             shifted = dt + timedelta(days=self.date_offset)
             return shifted.strftime('%Y-%m-%d')
         except (ValueError, AttributeError):
+            log.warning("Cannot parse date '%s', keeping original value", date_str)
             return date_str
 
     def _randomize_amount(self, amount_str: str | None, element: ET.Element) -> str:  # pylint: disable=c-extension-no-member
@@ -182,6 +184,7 @@ class XmlAnonymizer:  # pylint: disable=too-many-instance-attributes,too-few-pub
 
             return str(new_value)
         except (ValueError, AttributeError):
+            log.warning("Cannot parse amount '%s', keeping original value", amount_str)
             return amount_str
 
     def _anonymize_attribute_entry(self, entry: ET.Element) -> None:  # pylint: disable=c-extension-no-member

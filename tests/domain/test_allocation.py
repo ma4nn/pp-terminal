@@ -38,7 +38,7 @@ def test_single_category_mapping() -> None:
     mapping, multi = build_category_map(df, 'Asset Allocation')
 
     assert mapping == {'sec-1': 'Equity', 'sec-2': 'Bonds'}
-    assert multi == []
+    assert not multi
 
 
 def test_dominant_category_for_multi_assignment() -> None:
@@ -61,7 +61,7 @@ def test_ignores_account_assignments_and_other_taxonomies() -> None:
     mapping, multi = build_category_map(df, 'Asset Allocation')
 
     assert mapping == {'sec-1': 'Equity'}
-    assert multi == []
+    assert not multi
 
 
 def test_unknown_taxonomy_lists_available() -> None:

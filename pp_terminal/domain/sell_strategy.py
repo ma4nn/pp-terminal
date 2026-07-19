@@ -152,9 +152,6 @@ class MinTaxStrategy(SellStrategy):  # pylint: disable=too-few-public-methods
             _priority, _tie, row_idx = heapq.heappop(heap)
             row = df.loc[row_idx]
 
-            if row['netProceedsPerShare'] <= 0:
-                continue
-
             if row['netProceeds'] <= remaining + 0.005:
                 selected[row_idx] = row['shares']
                 remaining -= row['netProceeds']

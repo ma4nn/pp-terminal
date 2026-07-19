@@ -88,16 +88,6 @@ def provide_portfolio_with_purchases_and_sales() -> Portfolio:
     )
 
 
-@pytest.fixture(name='tax_csv_data_df')
-def provide_tax_csv_data_df() -> pd.DataFrame:
-    """Tax CSV data for testing."""
-    data = pd.DataFrame([
-        [2020, 'acc-1', 'sec-a', 0.379147],
-        [2021, 'acc-1', 'sec-a', 0.454976],
-    ], columns=['year', 'account_id', 'security_id', 'deemed_income'])
-    return data.set_index(['year', 'account_id', 'security_id'])
-
-
 def test_no_validation_config(portfolio_with_purchases_and_sales: Portfolio) -> None:
     """Test that validation completes successfully when no validation config exists."""
     results = _validate_securities(portfolio_with_purchases_and_sales, {})
@@ -291,7 +281,7 @@ def test_multiple_accounts_aggregated(portfolio_with_purchases_and_sales: Portfo
 
     results = _validate_securities(portfolio, config)
 
-    # sec-a should fail (acc-1: €5500 + acc-2: €500 = €6000 > €4500)
+    # sec-a should fail (FIFO cost basis across acc-1 and acc-2: €5000 > €4500)
     assert results['sec-a'].has_errors
     assert '5000.00' in results['sec-a'].messages
 

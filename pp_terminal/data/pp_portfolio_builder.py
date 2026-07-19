@@ -27,6 +27,7 @@ from pandera.typing import DataFrame
 
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import TransactionSchema, AccountSchema, SecuritySchema, SecurityPriceSchema, TransactionType, Attribute, Taxonomy
+from pp_terminal.exceptions import InputError
 from pp_terminal.utils.cache import cleanup_old_cache_files, get_cache_path
 from pp_terminal.utils.helper import enum_list_to_values
 from .attribute_type_converter import convert_attribute_types, get_converter_column_name
@@ -76,9 +77,14 @@ class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             taxonomy_assignments = taxonomy_assignments
         )
 
-        portfolio.base_currency = str(self._get_property('baseCurrency'))
+        base_currency = self._get_property('baseCurrency')
 
         self._db.close()
+
+        if base_currency is None:
+            raise InputError('missing baseCurrency property in the Portfolio Performance xml file "' + file.name + '"')
+
+        portfolio.base_currency = base_currency
 
         return portfolio
 

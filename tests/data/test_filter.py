@@ -157,7 +157,7 @@ class TestDropEmptyValues:
 
         assert list(result.index) == ['x']
         assert list(result.columns) == ['a']
-        assert result.loc['x', 'a'] == 1.0
+        assert result.loc['x', 'a'] == pytest.approx(1.0)
 
     def test_numeric_series_drops_nan_and_zero(self) -> None:
         series = pd.Series([1.0, 0.0, None, 2.0], index=['a', 'b', 'c', 'd'])
@@ -165,7 +165,7 @@ class TestDropEmptyValues:
         result = drop_empty_values(series)
 
         assert list(result.index) == ['a', 'd']
-        assert list(result) == [1.0, 2.0]
+        assert list(result) == pytest.approx([1.0, 2.0])
 
     def test_non_numeric_series_drops_only_nan(self) -> None:
         series = pd.Series(['x', None, 'y', ''], index=['a', 'b', 'c', 'd'])
@@ -215,6 +215,6 @@ class TestUnstackColumnByCurrency:
         result = unstack_column_by_currency(balances, column='balance', base_currency='EUR')
 
         assert list(result.index) == ['acc-2', 'acc-1']
-        assert result.loc['acc-1', 'EUR'] == 300.0
-        assert result.loc['acc-1', 'USD'] == 50.0
+        assert result.loc['acc-1', 'EUR'] == pytest.approx(300.0)
+        assert result.loc['acc-1', 'USD'] == pytest.approx(50.0)
         assert pd.isna(result.loc['acc-2', 'USD'])

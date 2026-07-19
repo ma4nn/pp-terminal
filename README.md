@@ -21,13 +21,13 @@ You can run the single commands individually or _pp-terminal_ can act as an [MCP
 Thís application **supports specific tax concepts** like FIFO, [Sparer-Pauschbetrag](https://de.wikipedia.org/wiki/Sparer-Pauschbetrag),
 [Grundfreibetrag](https://de.wikipedia.org/wiki/Grundfreibetrag_(Deutschland)), [Günstigerprüfung](https://de.wikipedia.org/wiki/G%C3%BCnstigerpr%C3%BCfung)
 and [Teilfreistellungen](https://de.wikipedia.org/wiki/Investmentsteuergesetz_(Deutschland)).  
-For example, _pp-terminal_ includes a CLI command to calculate the [Vorabpauschale](https://de.wikipedia.org/wiki/Vorabpauschale) (preliminary taxes) for Germany:
-
-![Vorabpauschale command in pp-terminal](docs/sample_vorabpauschale.png)
 
 > [!IMPORTANT]
 > I am not a tax consultant. All results of this application are just a non-binding indication and without guarantee.
 > They may deviate from the actual values.
+
+For example, _pp-terminal_ includes a CLI command to calculate the [Vorabpauschale](https://de.wikipedia.org/wiki/Vorabpauschale) (preliminary taxes) for Germany:
+![Vorabpauschale command in pp-terminal](docs/sample_vorabpauschale.png)
 
 > [!TIP]
 > Using MoneyMoney for managing your finances? Check out how to [export Sankey Charts](https://github.com/ma4nn/moneymoney-sankey).

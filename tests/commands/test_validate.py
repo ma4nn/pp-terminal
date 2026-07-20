@@ -28,8 +28,7 @@ import pandas as pd
 import pytest
 import typer
 from _pytest.fixtures import TopRequest
-from click.testing import Result
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from pp_terminal.commands.validate import run_validations
 from pp_terminal.utils.config import load_config

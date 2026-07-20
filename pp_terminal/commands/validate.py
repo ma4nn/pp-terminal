@@ -21,7 +21,6 @@ import logging
 from datetime import datetime
 from typing import Annotated, Callable, cast
 
-import click
 import typer
 
 from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
@@ -48,7 +47,7 @@ def _log_violations(results: dict[str, ValidationResult], describe_entity: Calla
 @app.command(name="validate")
 def run_validations(
         ctx: typer.Context,
-        rule: Annotated[list[str] | None, typer.Option('--rule', click_type=click.Choice(sorted(known_rule_types())), help='Run only rules of this type (repeatable); defaults to all configured rules.')] = None,
+        rule: Annotated[list[str] | None, typer.Option('--rule', help='Run only rules of this type (repeatable); defaults to all configured rules.')] = None,
 ) -> None:
     """Run configured validation rules on the portfolio data."""
     portfolio = cast(Portfolio, ctx.obj.portfolio)
@@ -56,6 +55,12 @@ def run_validations(
 
     rule_types = set(rule) if rule else None
     if rule_types is not None:
+        unknown = rule_types - known_rule_types()
+        if unknown:
+            raise typer.BadParameter(
+                f"{', '.join(sorted(unknown))} is not one of {', '.join(sorted(known_rule_types()))}.",
+                param_hint="'--rule'",
+            )
         unmatched = rule_types - configured_rule_types(config)
         if unmatched:
             log.warning('No rules of type(s) %s configured, nothing to validate for them', ', '.join(sorted(unmatched)))

@@ -27,6 +27,7 @@ from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType, TransactionType
 from pp_terminal.validation.engine import validate_securities, ValidationResult
+from pp_terminal.utils.config import load_config
 
 
 @pytest.fixture(name='portfolio_with_negative_balances')
@@ -93,7 +94,7 @@ def provide_portfolio_with_negative_balances() -> Portfolio:
 def provide_validation_results(portfolio_with_negative_balances: Portfolio) -> dict[str, ValidationResult]:
     """Built-in rule run with empty configuration, evaluated per 2023-01-01."""
     snapshot = PortfolioSnapshot(portfolio_with_negative_balances, datetime(2023, 1, 1))
-    return validate_securities(portfolio_with_negative_balances, snapshot, {})
+    return validate_securities(portfolio_with_negative_balances, snapshot, load_config({}))
 
 
 def test_negative_balance_warning_without_config(validation_results: dict[str, ValidationResult]) -> None:
@@ -127,7 +128,7 @@ def test_no_warning_for_forex_legs_netting_to_zero(validation_results: dict[str,
 def test_balances_are_evaluated_per_snapshot_date(portfolio_with_negative_balances: Portfolio) -> None:
     """Before the oversell happened, the same portfolio must validate clean."""
     snapshot = PortfolioSnapshot(portfolio_with_negative_balances, datetime(2020, 6, 1))
-    results = validate_securities(portfolio_with_negative_balances, snapshot, {})
+    results = validate_securities(portfolio_with_negative_balances, snapshot, load_config({}))
 
     assert not results['sec-oversold'].violations
 
@@ -137,7 +138,7 @@ def test_user_configured_rule_replaces_built_in(portfolio_with_negative_balances
         {'type': 'negative-share-balance', 'severity': 'error', 'tolerance': 0.001},
     ]}}}}
     snapshot = PortfolioSnapshot(portfolio_with_negative_balances, datetime(2023, 1, 1))
-    results = validate_securities(portfolio_with_negative_balances, snapshot, config)
+    results = validate_securities(portfolio_with_negative_balances, snapshot, load_config(config))
 
     assert len(results['sec-oversold'].violations) == 1
     assert results['sec-oversold'].has_errors
@@ -148,7 +149,7 @@ def test_built_in_rule_can_be_disabled_via_valid_months(portfolio_with_negative_
         {'type': 'negative-share-balance', 'valid-months': []},
     ]}}}}
     snapshot = PortfolioSnapshot(portfolio_with_negative_balances, datetime(2023, 1, 1))
-    results = validate_securities(portfolio_with_negative_balances, snapshot, config)
+    results = validate_securities(portfolio_with_negative_balances, snapshot, load_config(config))
 
     assert not results['sec-oversold'].violations
 

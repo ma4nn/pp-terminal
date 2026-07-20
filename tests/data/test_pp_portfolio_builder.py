@@ -29,7 +29,6 @@ from pp_terminal.exceptions import InputError
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder, CachedPpPortfolioBuilder
 from pp_terminal.data.ppxml2db_wrapper import Ppxml2dbWrapper
 from pp_terminal.domain.schemas import TransactionType
-from tests.conftest import EXEMPT_RATE_CONFIG
 
 EXPECTED_AMOUNT_SIGNS = {
     TransactionType.BUY: -1,
@@ -236,7 +235,7 @@ def test_cache_fallback_on_io_error(request: TopRequest, tmp_path: Path, caplog:
 
 def test_securities_percent_attributes_converted(request: TopRequest) -> None:
     """Test that securities with PercentPlainConverter attributes are loaded as decimals, not raw values."""
-    portfolio = PpPortfolioBuilder(config=EXEMPT_RATE_CONFIG).construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
 
     exempt_attr_uuid = '2baac2d0-459b-4b41-a0ef-d7dad0866892'
     assert exempt_attr_uuid in portfolio.securities.columns

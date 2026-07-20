@@ -100,17 +100,17 @@ Default input values for `simulate pmt` can be configured as well (command-line 
 ```toml
 [commands.simulate.pmt]
 returns = [2, 4, 6]  # assumed annual real returns in percent, one result row each
-end-date = "2055-12-31"  # date by which the capital should be depleted
+end-date = 2055-12-31  # date by which the capital should be depleted
 ```
 
 Instead of fixed `returns`, the assumed return can be derived from the current asset allocation as the
 value-weighted average of per-class expected real returns. Securities and deposit accounts assigned to a
 class in the taxonomy use that class's return; unclassified ones weigh in at 0%:
 ```toml
-taxonomy = "Anlagekategorien"  # global: the Portfolio Performance taxonomy that represents the asset allocation
+taxonomy = "Asset Allocation"  # global: the Portfolio Performance taxonomy that represents the asset allocation
 
 [commands.simulate.pmt]
-end-date = "2055-12-31"
+end-date = 2055-12-31
 returns-by-class = { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }  # expected real return in percent per class
 ```
 
@@ -317,28 +317,28 @@ e.g. a good starting point is [view_accounts.py](https://github.com/ma4nn/pp-ter
 
 The commands must be grouped by action, e.g. `view accounts` or `simulate share-sell`.
 
-Plugins can also contribute their own configuration section below `[commands]`. Register a [JSON Schema](https://json-schema.org/)
-(Draft 7) object fragment via the entry point `pp_terminal.config_schema`, named after the command path:
+Plugins can also contribute their own configuration section below `[commands]`. Register a [Pydantic](https://docs.pydantic.dev/)
+model via the entry point `pp_terminal.config_model`, named after the command path:
 
 ```toml
 # pyproject.toml
-[project.entry-points."pp_terminal.config_schema"]
-"simulate.safe-withdrawal" = "my_plugin.config:CONFIG_SCHEMA"
+[project.entry-points."pp_terminal.config_model"]
+"simulate.safe-withdrawal" = "my_plugin.config:SafeWithdrawalConfig"
 ```
 
 ```python
 # my_plugin/config.py
-CONFIG_SCHEMA = {
-    "type": "object",
-    "properties": {"years": {"type": "integer"}},
-    "additionalProperties": False,
-}
+from pp_terminal.utils.config import ConfigModel
+
+class SafeWithdrawalConfig(ConfigModel):
+    years: int = 40
 ```
 
-Users can then configure `[commands.simulate.safe-withdrawal]` in their config file, and the command reads the validated values
-via `get_command_config(config, 'simulate.safe-withdrawal.years')`. Redefining a section that _pp-terminal_ itself or another
-plugin already provides — or mounting inside one — is rejected. Entry point names have at most two segments (`<command>` or
-`<group>.<command>`), and fragments must be self-contained Draft-7 object schemas; `$ref` is not supported.
+Users can then configure `[commands.simulate.safe-withdrawal]` in their config file, and the command reads the validated,
+typed values via `command_config(config, SafeWithdrawalConfig).years`. Because the model extends `ConfigModel`, unknown keys are
+rejected and TOML-native types (dates, datetimes) are parsed automatically. Redefining a section that _pp-terminal_ itself or
+another plugin already provides — or mounting inside one — is rejected. Entry point names have at most two segments (`<command>`
+or `<group>.<command>`).
 
 The app uses [Typer](https://typer.tiangolo.com/) for composing the commands and [Rich](https://github.com/Textualize/rich)
 for nice console outputs. The Portfolio Performance XML file is read with [ppxml2db](https://github.com/pfalcon/ppxml2db) 

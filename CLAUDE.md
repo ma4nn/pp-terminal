@@ -17,7 +17,7 @@ In this repo, after every code edit you make, run `make check` and at least any 
 
 - The original Portfolio Performance XML file may NEVER be written to
 - pylint code quality MUST be 10/10
-- If config format changes, adapt `config.schema.json` and `README.md` accordingly
+- If config format changes, adapt the Pydantic config models (in `utils/config.py` and the command modules) and `README.md` accordingly
 - Never use `pylint: disable=protected-access` in tests
 - Attention to properly use the correct financial terms for naming variables/methods/classes/files 
 - Do NOT care about backwards compatibility unless explicitly stated (just leave a notice)
@@ -38,7 +38,6 @@ The codebase follows a layered architecture for clarity and maintainability:
 pp_terminal/
 ├── main.py                      # CLI entry point
 ├── exceptions.py                # Global exceptions
-├── config.schema.json           # Config schema
 │
 ├── domain/                      # Core business logic (no external dependencies)
 ├── data/                        # Data loading & transformation

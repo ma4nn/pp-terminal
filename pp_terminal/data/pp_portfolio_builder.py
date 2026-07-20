@@ -19,7 +19,6 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -51,11 +50,9 @@ _ATTRIBUTE_TYPE_SECURITY = 'name.abuchen.portfolio.model.Security'
 
 class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
     _db: Ppxml2dbWrapper
-    _config: Dict[str, Any]
 
-    def __init__(self, db: Ppxml2dbWrapper | None = None, config: Dict[str, Any] | None = None):
+    def __init__(self, db: Ppxml2dbWrapper | None = None):
         self._db = db if db is not None else Ppxml2dbWrapper(dbname=DB_NAME_IN_MEMORY)
-        self._config = config if config is not None else {}
 
     def construct(self, file: Path) -> Portfolio:
         self._db.open(file)
@@ -204,11 +201,6 @@ left join xact_unit as xu on xu.xact = x.uuid and xu.type = 'GROSS_VALUE'
 
 
 class CachedPpPortfolioBuilder:  # pylint: disable=too-few-public-methods
-    _config: Dict[str, Any]
-
-    def __init__(self, config: Dict[str, Any] | None = None):
-        self._config = config if config is not None else {}
-
     def construct(self, file: Path) -> Portfolio:
         use_cache_file = False
 
@@ -231,7 +223,7 @@ class CachedPpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             cache_path = None
             use_cache_file = False
 
-        builder = PpPortfolioBuilder(db, self._config)
+        builder = PpPortfolioBuilder(db)
 
         # Override the open behavior for cache hits
         if use_cache_file:

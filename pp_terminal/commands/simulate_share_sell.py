@@ -33,7 +33,7 @@ from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.sell_strategy import SellStrategy, FixedSharesStrategy, MinTaxStrategy, AllocationPreservingStrategy
 from pp_terminal.domain.allocation import build_category_map
 from pp_terminal.exceptions import InputError
-from pp_terminal.utils.config import Config, get_exempt_rate, get_tax_files, get_allowance
+from pp_terminal.utils.config import Config
 from pp_terminal.utils.helper import footer
 from pp_terminal.utils.options import tax_rate_callback, allowance_callback
 from pp_terminal.output.strategy import OutputStrategy, Console
@@ -100,7 +100,7 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
     if min_amount is not None and taxonomy is None:
         raise InputError("a minimum amount requires preserve-allocation (a taxonomy)")
 
-    effective_allowance = allowance if allowance is not None else get_allowance(config)
+    effective_allowance = allowance if allowance is not None else config.tax.allowance
 
     snapshot = PortfolioSnapshot(portfolio, date)
     holdings = snapshot.shares
@@ -120,7 +120,7 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
     if missing_prices:
         raise InputError(f"No price data for: {', '.join(missing_prices)}")
 
-    exempt_rate = get_exempt_rate(config)
+    exempt_rate = Percent(config.tax.exemption_rate)
     all_enriched = []
     for (acc_id, sec_id, _currency), _shares_held in holdings.items():
         transactions = snapshot.securities_account_transactions.pipe(
@@ -252,7 +252,7 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
     if date is None:
         date = get_today()
 
-    tax_files = [tax_csv] if tax_csv else get_tax_files(config)
+    tax_files = [tax_csv] if tax_csv else config.tax.files
     tax_csv_data = load_prepaid_tax_data(tax_files, portfolio)
 
     result = prepare_share_sell_df(

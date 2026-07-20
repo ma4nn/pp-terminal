@@ -327,9 +327,10 @@ def test_pmt_json_output(request: TopRequest) -> None:
     rows = json.loads(result.output)
     assert len(rows) == 1
     row = rows[0]
-    assert {'assumedReturn', 'grossPerYear', 'netPerYear', 'netPerMonth', 'netRate'} <= row.keys()
+    assert {'assumedReturn', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate'} <= row.keys()
     assert 0 < row['netPerYear'] <= row['grossPerYear']
     assert row['netPerMonth'] == pytest.approx(row['netPerYear'] / 12)
+    assert 0 < row['netRate'] <= row['grossRate']
 
 
 def test_pmt_multiple_return_rates(request: TopRequest) -> None:

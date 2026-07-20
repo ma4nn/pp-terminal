@@ -32,18 +32,11 @@ from pp_terminal.utils import config as config_module
 
 
 TAX_RATE = (0.25 + 0.055*0.25) * 100
-EXEMPT_RATE_CONFIG = {
-    "attributes": {
-        "securities": {
-            "exempt-rate": "2baac2d0-459b-4b41-a0ef-d7dad0866892"
-        }
-    }
-}
 
 
 @pytest.fixture(autouse=True)
 def _reset_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(config_module, '_loaded_config', {})
+    monkeypatch.setattr(config_module, '_loaded_config', config_module.empty_config())
     # point XDG at an empty dir so a developer's real ~/.config/pp-terminal/config.toml
     # can never leak into tests that don't pass --config
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))

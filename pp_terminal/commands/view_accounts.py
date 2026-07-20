@@ -35,11 +35,15 @@ from pp_terminal.domain.schemas import AccountType
 from pp_terminal.output.table_decorator import TableOptions
 from pp_terminal.commands.message_column import messages_renderer
 from pp_terminal.validation.engine import validate_accounts
-from pp_terminal.utils.config import get_command_config, Config
+from pp_terminal.utils.config import Config, ConfigModel, command_config
 
 app = typer.Typer()
 console = Console()
 log = logging.getLogger(__name__)
+
+
+class ViewAccountsConfig(ConfigModel):
+    fields: list[str] | None = None
 
 
 def _prepare_df_for_display(
@@ -144,7 +148,7 @@ def print_accounts(  # pylint: disable=too-many-locals
     config = cast(Config, ctx.obj.config)
 
     if fields is None:
-        config_fields = get_command_config(config, 'view.accounts.fields')
+        config_fields = command_config(config, ViewAccountsConfig).fields
         fields = ','.join(config_fields) if config_fields else 'AccountId,Name,Type,Balance,Messages'
 
     df = prepare_accounts_df(portfolio, config, output, by, type)

@@ -42,7 +42,7 @@ from pp_terminal.output.strategy import JsonOutputStrategy
 from pp_terminal.utils.cache import checksum
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.vap import calculate_vap, get_base_rate_for_year, add_account_balances
-from pp_terminal.utils.config import Config, get_tax_rate, get_exempt_rate, get_exempt_rate_attribute, get_tax_files
+from pp_terminal.utils.config import Config
 
 log = logging.getLogger(__name__)
 _MCP_NAME = "pp-mcp"
@@ -109,7 +109,7 @@ def _resolve_security(portfolio: Portfolio, security: str) -> str:
 
 
 def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: disable=too-many-locals,too-many-statements
-    builder = CachedPpPortfolioBuilder(config=config)
+    builder = CachedPpPortfolioBuilder()
     output = JsonOutputStrategy()  # plain (icon-free) validation messages for MCP records
     state: dict[str, Any] = {
         'portfolio': builder.construct(file_path),
@@ -212,14 +212,14 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         effective_year = year if year is not None else datetime.now().year - 1
 
         base_rate_pct = get_base_rate_for_year(effective_year)
-        tax_rate_pct = tax_rate if tax_rate is not None else get_tax_rate(config)
+        tax_rate_pct = tax_rate if tax_rate is not None else config.tax.rate
 
         snapshot_begin = PortfolioSnapshot(portfolio, datetime(effective_year, 1, 2))
         snapshot_end = PortfolioSnapshot(portfolio, datetime(effective_year, 12, 31))
 
         result = calculate_vap(
             snapshot_begin, snapshot_end,
-            base_rate_pct, tax_rate_pct, exempt_rate_percent=get_exempt_rate(config), exempt_rate_attr_uuid=get_exempt_rate_attribute(config)
+            base_rate_pct, tax_rate_pct, exempt_rate_percent=config.tax.exemption_rate, exempt_rate_attr_uuid=config.tax.exemption_rate_attribute
         )
 
         if result.empty:
@@ -230,7 +230,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
 
     def _sell_defaults(date: str | None, tax_rate: float | None) -> tuple[datetime, float]:
         sell_date = datetime.fromisoformat(date) if date else datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        effective_tax_rate = tax_rate if tax_rate is not None else get_tax_rate(config)
+        effective_tax_rate = tax_rate if tax_rate is not None else config.tax.rate
         return sell_date, effective_tax_rate
 
     @mcp.tool()
@@ -256,7 +256,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """
         portfolio = _ensure_fresh_portfolio()
         sell_date, effective_tax_rate = _sell_defaults(date, tax_rate)
-        tax_csv_data = load_prepaid_tax_data(get_tax_files(config), portfolio)
+        tax_csv_data = load_prepaid_tax_data(config.tax.files, portfolio)
         security_id = _resolve_security(portfolio, security) if security else None
 
         result = prepare_share_sell_df(
@@ -284,7 +284,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """
         portfolio = _ensure_fresh_portfolio()
         sell_date, effective_tax_rate = _sell_defaults(date, tax_rate)
-        tax_csv_data = load_prepaid_tax_data(get_tax_files(config), portfolio)
+        tax_csv_data = load_prepaid_tax_data(config.tax.files, portfolio)
 
         lots = prepare_share_sell_df(
             portfolio, config, sell_date, effective_tax_rate,
@@ -322,7 +322,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """
         portfolio = _ensure_fresh_portfolio()
         sell_date, effective_tax_rate = _sell_defaults(date, tax_rate)
-        tax_csv_data = load_prepaid_tax_data(get_tax_files(config), portfolio)
+        tax_csv_data = load_prepaid_tax_data(config.tax.files, portfolio)
         security_id = _resolve_security(portfolio, security)
 
         result = prepare_share_sell_df(
@@ -368,7 +368,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """
         portfolio = _ensure_fresh_portfolio()
         sell_date, effective_tax_rate = _sell_defaults(date, tax_rate)
-        tax_csv_data = load_prepaid_tax_data(get_tax_files(config), portfolio)
+        tax_csv_data = load_prepaid_tax_data(config.tax.files, portfolio)
         security_id = _resolve_security(portfolio, security) if security else None
 
         result = prepare_share_sell_df(

@@ -26,6 +26,7 @@ import pytest
 from typer import Context
 
 from pp_terminal.commands.view_securities import print_securities
+from pp_terminal.utils.config import empty_config
 from pp_terminal.output.strategy import RichOutputStrategy
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
@@ -136,7 +137,7 @@ def test_list_securities_with_shares(securities_portfolio: Portfolio, capsys: py
     ctx.obj = Mock()
     ctx.obj.portfolio = securities_portfolio
     ctx.obj.output = RichOutputStrategy()
-    ctx.obj.config = {}
+    ctx.obj.config = empty_config()
 
     print_securities(ctx)
 
@@ -158,7 +159,7 @@ def test_list_securities_without_transactions(empty_securities_portfolio: Portfo
     ctx.obj = Mock()
     ctx.obj.portfolio = empty_securities_portfolio
     ctx.obj.output = RichOutputStrategy()
-    ctx.obj.config = {}
+    ctx.obj.config = empty_config()
 
     print_securities(ctx)
 
@@ -189,7 +190,7 @@ def test_list_securities_sorted_by_name(securities_portfolio: Portfolio, capsys:
     ctx.obj = Mock()
     ctx.obj.portfolio = securities_portfolio
     ctx.obj.output = RichOutputStrategy()
-    ctx.obj.config = {}
+    ctx.obj.config = empty_config()
 
     print_securities(ctx)
 
@@ -208,7 +209,7 @@ def _make_ctx(portfolio: Portfolio) -> Context:
     ctx.obj = Mock()
     ctx.obj.portfolio = portfolio
     ctx.obj.output = RichOutputStrategy()
-    ctx.obj.config = {}
+    ctx.obj.config = empty_config()
     return ctx
 
 

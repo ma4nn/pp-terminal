@@ -25,7 +25,7 @@ import pandas as pd
 import typer
 from typing_extensions import Annotated
 
-from pp_terminal.utils.config import Config, get_exempt_rate_attribute
+from pp_terminal.utils.config import Config
 from pp_terminal.utils.helper import get_last_year, footer
 from pp_terminal.utils.options import tax_rate_callback, exempt_rate_callback, allowance_callback
 from pp_terminal.output.strategy import OutputStrategy, Console
@@ -78,7 +78,7 @@ def print_tax_table(  # pylint: disable=too-many-locals,too-many-arguments,too-m
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
 
-    exempt_rate_uuid = get_exempt_rate_attribute(config)
+    exempt_rate_uuid = config.tax.exemption_rate_attribute
     console.print(output.hint('You can define the exempt rate per each security individually by creating a custom security attribute of type "Percent Number" in Portfolio Performance and add it to pp-terminal configuration file.'))
 
     snapshot_begin = PortfolioSnapshot(portfolio, datetime(year.year, 1, 2))

@@ -74,7 +74,9 @@ def _create_anonymized_temp_file(original_file: Path) -> Path:
     seed = zlib.crc32(str(original_file.resolve()).encode()) % (2**31)
     log.debug("Anonymizing data with seed %d", seed)
 
-    anonymizer = XmlAnonymizer(seed=seed, config=get_config().get('anonymize', {}).get('attributes', {}))
+    anonymize_config = get_config().anonymize
+    attributes = {uuid: spec.model_dump(by_alias=True) for uuid, spec in anonymize_config.attributes.items()} if anonymize_config else {}
+    anonymizer = XmlAnonymizer(seed=seed, config=attributes)
     anonymizer.anonymize_file(original_file, temp_path)
     log.debug("Created anonymized file at %s", temp_path)
 
@@ -116,11 +118,11 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                             handlers=[RichHandler(rich_tracebacks=True, show_time=False, console=RichConsole(stderr=True))])
 
     set_precision(precision)
-    should_anonymize = anonymize or 'anonymize' in get_config()
+    should_anonymize = anonymize or get_config().anonymize is not None
     source_file = _create_anonymized_temp_file(file) if should_anonymize else file
 
     try:
-        builder = CachedPpPortfolioBuilder(config=get_config()) if cache else PpPortfolioBuilder(config=get_config())
+        builder = CachedPpPortfolioBuilder() if cache else PpPortfolioBuilder()
 
         ctx.obj = SimpleNamespace(
             source_file=source_file,

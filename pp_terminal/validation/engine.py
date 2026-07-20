@@ -25,9 +25,9 @@ import pandas as pd
 from pp_terminal.data.filters import filter_not_retired
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
-from pp_terminal.utils.config import get_command_config
+from pp_terminal.utils.config import Config, command_config
 from pp_terminal.validation.base import ValidationRule
-from pp_terminal.validation.rules import create_built_in_securities_rules, create_rule, get_applicable_rules
+from pp_terminal.validation.rules import ValidateConfig, create_built_in_securities_rules, create_rule, get_applicable_rules
 
 
 @dataclass
@@ -57,12 +57,9 @@ class ValidationResult:
         return cls(entity_id=entity_id, violations=[])
 
 
-def configured_rule_types(config: dict[str, Any]) -> set[str]:
-    user_types = {
-        rule_config['type']
-        for config_key in ('validate.accounts.rules', 'validate.securities.rules')
-        for rule_config in get_command_config(config, config_key, [])
-    }
+def configured_rule_types(config: Config) -> set[str]:
+    validate = command_config(config, ValidateConfig)
+    user_types = {rule.type for rule in validate.accounts.rules} | {rule.type for rule in validate.securities.rules}
     return user_types | {rule.rule_type for rule in create_built_in_securities_rules()}
 
 
@@ -93,11 +90,11 @@ def _validate_entity(
 def validate_accounts(
     portfolio: Portfolio,
     snapshot: PortfolioSnapshot,
-    config: dict[str, Any],
+    config: Config,
     rule_types: set[str] | None = None
 ) -> dict[str, ValidationResult]:
     """Validates all deposit accounts. Returns dict mapping account_id -> ValidationResult."""
-    rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.accounts.rules', [])]
+    rules = [create_rule(rule_config) for rule_config in command_config(config, ValidateConfig).accounts.rules]
     rules = _filter_rules(rules, rule_types)
 
     total_balances = snapshot.balances.groupby('accountId').sum()
@@ -131,10 +128,10 @@ def validate_accounts(
 def validate_securities(
     portfolio: Portfolio,
     snapshot: PortfolioSnapshot,
-    config: dict[str, Any],
+    config: Config,
     rule_types: set[str] | None = None
 ) -> dict[str, ValidationResult]:
-    user_rules = [create_rule(rule_config) for rule_config in get_command_config(config, 'validate.securities.rules', [])]
+    user_rules = [create_rule(rule_config) for rule_config in command_config(config, ValidateConfig).securities.rules]
     configured_types = {rule.rule_type for rule in user_rules}
     rules = [rule for rule in create_built_in_securities_rules() if rule.rule_type not in configured_types] + user_rules
     rules = _filter_rules(rules, rule_types)

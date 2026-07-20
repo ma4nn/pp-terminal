@@ -27,7 +27,7 @@ from pp_terminal.data.filters import clean_for_display, filter_by_security, pivo
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.vap import calculate_vap_by_security
 from pp_terminal.output.column_utils import normalize_columns
-from pp_terminal.utils.config import Config, get_tax_rate, get_exempt_rate, get_exempt_rate_attribute
+from pp_terminal.utils.config import Config, ConfigModel, command_config
 from pp_terminal.utils.helper import footer
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio import Portfolio
@@ -35,12 +35,15 @@ from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.output.table_decorator import TableOptions, format_value
 from pp_terminal.commands.message_column import messages_renderer
 from pp_terminal.validation.engine import validate_securities
-from pp_terminal.utils.config import get_command_config
 from pp_terminal.domain.schemas import Attribute
 
 app = typer.Typer()
 console = Console()
 log = logging.getLogger(__name__)
+
+
+class ViewSecuritiesConfig(ConfigModel):
+    fields: list[str] | None = None
 
 
 def prepare_securities_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -86,9 +89,9 @@ def prepare_securities_df(  # pylint: disable=too-many-arguments,too-many-positi
     vap_by_security = calculate_vap_by_security(
         portfolio,
         by.year,
-        get_tax_rate(config),
-        get_exempt_rate(config),
-        get_exempt_rate_attribute(config)
+        config.tax.rate,
+        config.tax.exemption_rate,
+        config.tax.exemption_rate_attribute
     )
     df['vap'] = df['securityId'].map(vap_by_security) if vap_by_security else None
 
@@ -111,7 +114,7 @@ def print_securities(  # pylint: disable=too-many-locals
     config = cast(Config, ctx.obj.config)
 
     if fields is None:
-        config_fields = get_command_config(config, 'view.securities.fields')
+        config_fields = command_config(config, ViewSecuritiesConfig).fields
         fields = ','.join(config_fields) if config_fields else 'SecurityId,Name,Wkn,Currency,Shares,Messages'
 
     df = prepare_securities_df(portfolio, config, output, by, active, in_stock)

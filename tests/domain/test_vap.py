@@ -216,14 +216,7 @@ def test_kommer_2021(request: TopRequest) -> None:
 
 
 def test_kommer_2023(request: TopRequest) -> None:
-    config = {
-        "attributes": {
-            "securities": {
-                "exemption-rate": "2baac2d0-459b-4b41-a0ef-d7dad0866892"
-            }
-        }
-    }
-    portfolio = PpPortfolioBuilder(config=config).construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
     snapshot_begin = PortfolioSnapshot(portfolio, datetime(2023, 1, 2))
     snapshot_end = PortfolioSnapshot(portfolio, datetime(2023, 12, 31))
 
@@ -243,7 +236,7 @@ def test_kommer_2023(request: TopRequest) -> None:
     expected_df.index.name = 'securityId'
     expected_df = VapResultSchema.validate(expected_df)
 
-    result = calculate_vap(snapshot_begin, snapshot_end, 2.0, TAX_RATE, 30.0, config['attributes']['securities']['exemption-rate'])
+    result = calculate_vap(snapshot_begin, snapshot_end, 2.0, TAX_RATE, 30.0, '2baac2d0-459b-4b41-a0ef-d7dad0866892')
 
     assert not result.empty
     assert_frame_equal(expected_df, result.round(5))

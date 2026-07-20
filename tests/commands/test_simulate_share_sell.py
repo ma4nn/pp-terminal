@@ -25,6 +25,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from pp_terminal.utils.config import empty_config
 from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df, _resolve_categories, summarize_sell_plan
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.exceptions import InputError
@@ -67,13 +68,13 @@ def _holdings(security_ids: list[str]) -> pd.Series:
 def test_preserve_allocation_requires_target_net() -> None:
     """The shared entry point (used by CLI and MCP) rejects a taxonomy without a target net."""
     with pytest.raises(InputError, match="requires a target net"):
-        prepare_share_sell_df(Portfolio(), {}, datetime(2025, 1, 1), 26.375, taxonomy="Anything")
+        prepare_share_sell_df(Portfolio(), empty_config(), datetime(2025, 1, 1), 26.375, taxonomy="Anything")
 
 
 def test_min_amount_requires_preserve_allocation() -> None:
     """A minimum trade size only makes sense together with allocation preservation."""
     with pytest.raises(InputError, match="requires preserve-allocation"):
-        prepare_share_sell_df(Portfolio(), {}, datetime(2025, 1, 1), 26.375, target_net=1000.0, min_amount=50.0)
+        prepare_share_sell_df(Portfolio(), empty_config(), datetime(2025, 1, 1), 26.375, target_net=1000.0, min_amount=50.0)
 
 
 def test_warns_about_held_but_unclassified_securities(warning_log: pytest.LogCaptureFixture) -> None:

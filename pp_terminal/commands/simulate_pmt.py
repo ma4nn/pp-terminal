@@ -17,7 +17,7 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
-from datetime import datetime
+from datetime import datetime, date as DateType
 import logging
 import math
 from pathlib import Path
@@ -28,6 +28,7 @@ import click
 import pandas as pd
 import typer
 from pandera.typing import DataFrame
+from pydantic import Field
 
 from pp_terminal.data.filters import filter_by_account_and_security
 from pp_terminal.data.tax import load_prepaid_tax_data
@@ -39,7 +40,7 @@ from pp_terminal.domain.schemas import Money, Percent, TaxPaidSchema
 from pp_terminal.exceptions import InputError
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.output.table_decorator import TableOptions
-from pp_terminal.utils.config import Config, get_allowance, get_command_config, get_exempt_rate, get_tax_files, get_taxonomy
+from pp_terminal.utils.config import Config, ConfigModel, command_config
 from pp_terminal.utils.helper import footer
 from pp_terminal.utils.options import tax_rate_callback, allowance_callback
 
@@ -47,7 +48,13 @@ app = typer.Typer()
 console = Console()
 log = logging.getLogger(__name__)
 
-_RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'netPerYear', 'netPerMonth', 'netRate']
+
+class PmtConfig(ConfigModel):
+    returns: list[Annotated[float, Field(ge=0, le=100)]] | None = None
+    end_date: DateType | None = None
+    returns_by_class: dict[str, Annotated[float, Field(ge=0, le=100)]] | None = None
+
+_RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate']
 
 
 def amortization_factor(rate: float, years: float) -> float:
@@ -178,10 +185,10 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
         return pd.DataFrame()
 
     years = _horizon_years(date, end_date)
-    effective_allowance = allowance if allowance is not None else get_allowance(config)
+    effective_allowance = allowance if allowance is not None else config.tax.allowance
 
     snapshot = PortfolioSnapshot(portfolio, date)
-    market_value, taxable_gain = _taxable_position(snapshot, tax_rate, get_exempt_rate(config), tax_csv_data)
+    market_value, taxable_gain = _taxable_position(snapshot, tax_rate, Percent(config.tax.exemption_rate), tax_csv_data)
     cash = Money(snapshot.balances.sum())
 
     if market_value == 0 and cash == 0:
@@ -201,6 +208,7 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
         rows.append({
             'assumedReturn': Percent(assumed_return),
             'grossPerYear': Money(gross),
+            'grossRate': Percent(gross / start_capital * 100),
             'netPerYear': Money(net),
             'netPerMonth': Money(net / 12),
             'netRate': Percent(net / start_capital * 100),
@@ -235,26 +243,25 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
     portfolio = cast(Portfolio, ctx.obj.portfolio)
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
+    pmt = command_config(config, PmtConfig)
 
     if date is None:
         date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     if not assumed_returns:
-        assumed_returns = [Percent(value) for value in get_command_config(config, 'simulate.pmt.returns', [])]
+        assumed_returns = [Percent(value) for value in (pmt.returns or [])]
     if not assumed_returns:
-        taxonomy = get_taxonomy(config)
-        returns_by_class = get_command_config(config, 'simulate.pmt.returns-by-class')
-        if taxonomy and returns_by_class:
-            assumed_returns = [blended_return_from_allocation(portfolio, date, taxonomy, returns_by_class)]
+        taxonomy = config.taxonomy
+        if taxonomy and pmt.returns_by_class:
+            assumed_returns = [blended_return_from_allocation(portfolio, date, taxonomy, pmt.returns_by_class)]
     if not assumed_returns:
         assumed_returns = [Percent(typer.prompt("Expected Annual Real Return (%)", type=click.FloatRange(0, 100)))]
-    if end_date is None:
-        config_end_date = get_command_config(config, 'simulate.pmt.end-date')
-        end_date = datetime.fromisoformat(config_end_date) if config_end_date else None
+    if end_date is None and pmt.end_date is not None:
+        end_date = datetime.combine(pmt.end_date, datetime.min.time())
     if end_date is None:
         end_date = typer.prompt("End Date", type=click.DateTime(formats=["%Y-%m-%d"]))
 
-    tax_files = [tax_csv] if tax_csv else get_tax_files(config)
+    tax_files = [tax_csv] if tax_csv else config.tax.files
     tax_csv_data = load_prepaid_tax_data(tax_files, portfolio)
 
     result = prepare_pmt_result(portfolio, config, date, tax_rate, assumed_returns, end_date, tax_csv_data, allowance)

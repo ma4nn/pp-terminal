@@ -18,36 +18,53 @@
 """
 
 import importlib.metadata
-import json
 import logging
 from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
 
 import pytest
 from _pytest.fixtures import TopRequest
-from jsonschema import ValidationError as JsonSchemaValidationError
+from pydantic import Field
 
-from pp_terminal.utils.config import validated_toml_loader, get_command_config, get_allowance, get_tax_files, _load_schema, _merged_schema
+from pp_terminal.commands.simulate_pmt import PmtConfig
+from pp_terminal.commands.view_accounts import ViewAccountsConfig
+from pp_terminal.exceptions import ConfigValidationError
+from pp_terminal.utils.config import (
+    ConfigModel,
+    build_config_model,
+    command_config,
+    empty_config,
+    get_config,
+    load_config,
+    validated_toml_loader,
+)
 
-PLUGIN_SCHEMA = {'type': 'object', 'properties': {'years': {'type': 'integer'}}, 'additionalProperties': False}
-OTHER_PLUGIN_SCHEMA = {'type': 'object', 'properties': {'quota': {'type': 'number'}}, 'additionalProperties': False}
-NOT_A_DICT_FRAGMENT = 'not a dict'
-INVALID_SCHEMA_FRAGMENT = {'type': 'object', 'properties': {'x': {'type': 'objct'}}}
-REF_FRAGMENT = {'type': 'object', 'properties': {'years': {'$ref': '#/definitions/year'}}, 'definitions': {'year': {'type': 'integer'}}}
+_PLUGIN_GROUP = 'pp_terminal.config_model'
 
-_FRAGMENT_GROUP = 'pp_terminal.config_schema'
+
+class SafeWithdrawalConfig(ConfigModel):
+    years: int = Field(40, ge=1)
+
+
+class MonteCarloConfig(ConfigModel):
+    quota: float = Field(0.5, ge=0, le=1)
+
+
+NOT_A_MODEL = 'not a config model'
 
 
 @pytest.fixture(autouse=True)
-def _reset_schema_cache() -> Iterator[None]:
-    _merged_schema.cache_clear()
+def _reset_model_cache() -> Iterator[None]:
+    build_config_model.cache_clear()
     yield
-    _merged_schema.cache_clear()
+    build_config_model.cache_clear()
 
 
-def _install_fragments(monkeypatch: pytest.MonkeyPatch, fragments: dict[str, str]) -> None:
-    entry_points = tuple(importlib.metadata.EntryPoint(name=name, value=value, group=_FRAGMENT_GROUP) for name, value in fragments.items())
-    monkeypatch.setattr(importlib.metadata, 'entry_points', lambda group: entry_points if group == _FRAGMENT_GROUP else ())
+def _install_models(monkeypatch: pytest.MonkeyPatch, models: dict[str, str]) -> None:
+    entry_points = tuple(importlib.metadata.EntryPoint(name=name, value=value, group=_PLUGIN_GROUP) for name, value in models.items())
+    monkeypatch.setattr(importlib.metadata, 'entry_points', lambda group: entry_points if group == _PLUGIN_GROUP else ())
+    build_config_model.cache_clear()
 
 
 def _write_config(tmp_path: Path, content: str) -> str:
@@ -55,6 +72,8 @@ def _write_config(tmp_path: Path, content: str) -> str:
     config_file.write_text(content, encoding='utf-8')
     return str(config_file)
 
+
+# --- path resolution (the loader still returns the raw mapping for typer-config) ---
 
 def test_should_load_config_from_default_xdg_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: TopRequest) -> None:
     config_dir = tmp_path / 'pp-terminal'
@@ -95,8 +114,36 @@ def test_should_honor_home_fallback_when_xdg_unset(monkeypatch: pytest.MonkeyPat
 
     assert result.get('precision') == 4
 
+
+# --- typed access ---
+
+def test_should_expose_typed_config_after_load(request: TopRequest) -> None:
+    validated_toml_loader(str(request.path.parent.parent / 'fixtures' / 'kommer.toml'))
+
+    assert get_config().tax.rate == pytest.approx(27.375)
+    assert get_config().tax.exemption_rate_attribute == '2baac2d0-459b-4b41-a0ef-d7dad0866892'
+
+def test_should_parse_native_toml_date(tmp_path: Path) -> None:
+    validated_toml_loader(_write_config(tmp_path, '[commands.simulate.pmt]\nend-date = 2055-12-31\n'))
+
+    assert command_config(get_config(), PmtConfig).end_date == date(2055, 12, 31)
+
+def test_should_default_allowance_when_not_configured() -> None:
+    assert empty_config().tax.allowance == pytest.approx(1000.0)
+
+def test_should_default_to_no_tax_files() -> None:
+    assert empty_config().tax.files == []
+
+def test_should_coerce_single_tax_file_to_list() -> None:
+    assert load_config({'tax': {'files': 'taxes.csv'}}).tax.files == [Path('taxes.csv')]
+
+def test_should_keep_tax_file_list() -> None:
+    assert load_config({'tax': {'files': ['a.csv', 'b.csv']}}).tax.files == [Path('a.csv'), Path('b.csv')]
+
+
+# --- invalid config handling ---
+
 def test_should_ignore_invalid_config_at_default_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    _install_fragments(monkeypatch, {})  # no plugins -> a [commands.simulate...] section is schema-invalid
     config_dir = tmp_path / 'pp-terminal'
     config_dir.mkdir()
     (config_dir / 'config.toml').write_text('[commands.simulate.safe-withdrawal]\nyears = 40\n', encoding='utf-8')
@@ -108,162 +155,85 @@ def test_should_ignore_invalid_config_at_default_location(monkeypatch: pytest.Mo
     assert result == {}
     assert 'Ignoring invalid config' in caplog.text
 
-def test_should_still_reject_invalid_config_when_explicitly_passed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _install_fragments(monkeypatch, {})
-
-    with pytest.raises(JsonSchemaValidationError, match=r"commands\.simulate: .*'safe-withdrawal' was unexpected"):
+def test_should_reject_invalid_config_when_explicitly_passed(tmp_path: Path) -> None:
+    with pytest.raises(ConfigValidationError, match=r'commands\.simulate\.safe-withdrawal'):
         validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n'))
-
-def test_should_validate_plugin_config_when_fragment_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _install_fragments(monkeypatch, {'simulate.safe-withdrawal': 'tests.utils.test_config:PLUGIN_SCHEMA'})
-
-    result = validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n'))
-
-    assert get_command_config(result, 'simulate.safe-withdrawal.years') == 40
-
-def test_should_reject_plugin_config_when_fragment_not_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _install_fragments(monkeypatch, {})
-
-    with pytest.raises(JsonSchemaValidationError, match=r"commands\.simulate: .*'safe-withdrawal' was unexpected"):
-        validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n'))
-
-def test_should_reject_unknown_key_in_plugin_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _install_fragments(monkeypatch, {'simulate.safe-withdrawal': 'tests.utils.test_config:PLUGIN_SCHEMA'})
-
-    with pytest.raises(JsonSchemaValidationError, match=r"commands\.simulate\.safe-withdrawal: .*'unknown' was unexpected"):
-        validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nunknown = 1\n'))
-
-def test_should_reject_type_violation_in_plugin_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _install_fragments(monkeypatch, {'simulate.safe-withdrawal': 'tests.utils.test_config:PLUGIN_SCHEMA'})
-
-    with pytest.raises(JsonSchemaValidationError, match=r"commands\.simulate\.safe-withdrawal\.years:"):
-        validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = "40"\n'))
-
-def test_should_mount_multiple_fragments_into_same_group(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _install_fragments(monkeypatch, {
-        'simulate.safe-withdrawal': 'tests.utils.test_config:PLUGIN_SCHEMA',
-        'simulate.monte-carlo': 'tests.utils.test_config:OTHER_PLUGIN_SCHEMA',
-    })
-
-    result = validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n[commands.simulate.monte-carlo]\nquota = 0.5\n'))
-
-    assert get_command_config(result, 'simulate.safe-withdrawal.years') == 40
-    assert get_command_config(result, 'simulate.monte-carlo.quota') == pytest.approx(0.5)
-
-def test_should_mount_fragment_into_core_group(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _install_fragments(monkeypatch, {'view.myreport': 'tests.utils.test_config:PLUGIN_SCHEMA'})
-
-    result = validated_toml_loader(_write_config(tmp_path, '[commands.view.accounts]\nfields = ["Name"]\n[commands.view.myreport]\nyears = 1\n'))
-
-    assert get_command_config(result, 'view.myreport.years') == 1
-    assert get_command_config(result, 'view.accounts.fields') == ['Name']
-
-def test_should_skip_fragment_colliding_with_core_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """A plugin claiming a core-owned section must be ignored, not break every command."""
-    _install_fragments(monkeypatch, {'view.accounts': 'tests.utils.test_config:PLUGIN_SCHEMA'})
-
-    with caplog.at_level(logging.ERROR):
-        result = validated_toml_loader(_write_config(tmp_path, 'precision = 4\n[commands.view.accounts]\nfields = ["Name"]\n'))
-
-    assert 'commands.view.accounts' in caplog.text
-    assert get_command_config(result, 'view.accounts.fields') == ['Name']  # the core section stays authoritative
-
-
-def test_should_skip_fragment_colliding_with_core_simulate_group(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Regression: a plugin fragment named exactly 'simulate' collides with the core group since simulate pmt got config support."""
-    _install_fragments(monkeypatch, {'simulate': 'tests.utils.test_config:PLUGIN_SCHEMA'})
-
-    with caplog.at_level(logging.ERROR):
-        result = validated_toml_loader(_write_config(tmp_path, 'precision = 4\n'))
-
-    assert 'commands.simulate' in caplog.text
-    assert result.get('precision') == 4
-
-def test_should_skip_broken_schema_fragments(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    _install_fragments(monkeypatch, {
-        'simulate.broken-import': 'nonexistent_module_xyz:SCHEMA',
-        'simulate.not-a-dict': 'tests.utils.test_config:NOT_A_DICT_FRAGMENT',
-        'simulate.invalid-schema': 'tests.utils.test_config:INVALID_SCHEMA_FRAGMENT',
-        'simulate.with-ref': 'tests.utils.test_config:REF_FRAGMENT',
-        'simulate.safe-withdrawal': 'tests.utils.test_config:PLUGIN_SCHEMA',
-    })
-
-    with caplog.at_level(logging.ERROR):
-        result = validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n'))
-
-    assert get_command_config(result, 'simulate.safe-withdrawal.years') == 40
-    assert 'simulate.broken-import' in caplog.text
-    assert 'simulate.not-a-dict' in caplog.text
-    assert 'simulate.invalid-schema' in caplog.text
-    assert 'simulate.with-ref' in caplog.text
-
-def test_should_skip_mounting_inside_another_plugins_section(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """A mount path nested inside an earlier fragment is a name conflict and is skipped; the fragment constant must stay pristine."""
-    _install_fragments(monkeypatch, {
-        'custom': 'tests.utils.test_config:PLUGIN_SCHEMA',
-        'custom.foo': 'tests.utils.test_config:OTHER_PLUGIN_SCHEMA',
-    })
-    pristine = json.dumps(PLUGIN_SCHEMA, sort_keys=True)
-
-    with caplog.at_level(logging.ERROR):
-        _merged_schema()
-
-    assert 'commands.custom.foo' in caplog.text
-    assert json.dumps(PLUGIN_SCHEMA, sort_keys=True) == pristine
-
-def test_should_skip_fragment_with_too_deep_command_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Entry point names have at most two segments, so a core leaf section can never be extended from within."""
-    _install_fragments(monkeypatch, {'view.accounts.evilchild': 'tests.utils.test_config:PLUGIN_SCHEMA'})
-
-    with caplog.at_level(logging.ERROR):
-        result = validated_toml_loader(_write_config(tmp_path, '[commands.view.accounts]\nfields = ["Name"]\n'))
-
-    assert get_command_config(result, 'view.accounts.fields') == ['Name']
-    assert 'view.accounts.evilchild' in caplog.text
-
-    with pytest.raises(JsonSchemaValidationError, match=r"'evilchild' was unexpected"):
-        validated_toml_loader(_write_config(tmp_path, '[commands.view.accounts.evilchild]\nyears = 1\n'))
-
-def test_should_keep_schema_unchanged_without_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fragments(monkeypatch, {})
-
-    assert _merged_schema() == _load_schema()
-
-def test_should_return_default_allowance_when_not_configured() -> None:
-    assert get_allowance({}) == pytest.approx(1000.0)
-
-def test_should_return_configured_allowance(tmp_path: Path) -> None:
-    result = validated_toml_loader(_write_config(tmp_path, '[tax]\nallowance = 2000\n'))
-
-    assert get_allowance(result) == pytest.approx(2000.0)
-
-def test_should_return_single_tax_file_for_scalar_value(tmp_path: Path) -> None:
-    result = validated_toml_loader(_write_config(tmp_path, '[tax]\nfiles = "taxes.csv"\n'))
-
-    assert get_tax_files(result) == [Path('taxes.csv')]
-
-def test_should_return_tax_files_for_list_value(tmp_path: Path) -> None:
-    result = validated_toml_loader(_write_config(tmp_path, '[tax]\nfiles = ["a.csv", "b.csv"]\n'))
-
-    assert get_tax_files(result) == [Path('a.csv'), Path('b.csv')]
-
-def test_should_return_no_tax_files_when_not_configured() -> None:
-    assert get_tax_files({}) == []
 
 def test_should_reject_negative_allowance(tmp_path: Path) -> None:
-    with pytest.raises(JsonSchemaValidationError, match=r'tax\.allowance'):
+    with pytest.raises(ConfigValidationError, match=r'tax\.allowance'):
         validated_toml_loader(_write_config(tmp_path, '[tax]\nallowance = -1\n'))
 
-def test_should_merge_fragments_deterministically_regardless_of_registration_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    fragments = {
-        'simulate.safe-withdrawal': 'tests.utils.test_config:PLUGIN_SCHEMA',
-        'simulate.monte-carlo': 'tests.utils.test_config:OTHER_PLUGIN_SCHEMA',
-    }
-    _install_fragments(monkeypatch, fragments)
-    first = json.dumps(_merged_schema())
 
-    _merged_schema.cache_clear()
-    _install_fragments(monkeypatch, dict(reversed(list(fragments.items()))))
-    second = json.dumps(_merged_schema())
+# --- closed-world validation ---
 
-    assert first == second
+def test_should_reject_unknown_top_level_key() -> None:
+    with pytest.raises(Exception, match=r'unexpected|not permitted'):
+        load_config({'nonsense': 1})
+
+def test_should_reject_unknown_key_in_core_section() -> None:
+    with pytest.raises(Exception, match=r'unexpected|not permitted'):
+        load_config({'tax': {'ratee': 5}})
+
+def test_should_reject_unknown_command_section() -> None:
+    with pytest.raises(Exception, match=r'unexpected|not permitted'):
+        load_config({'commands': {'simulate': {'unknown': {}}}})
+
+def test_should_reject_malformed_uuid_in_rule_value() -> None:
+    with pytest.raises(Exception, match=r'value'):
+        load_config({'commands': {'validate': {'accounts': {'rules': [
+            {'type': 'balance-limit-from-attribute', 'value': 'not-a-uuid'},
+        ]}}}})
+
+
+# --- plugin (out-of-repo) extension via entry points ---
+
+def test_should_validate_registered_plugin_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _install_models(monkeypatch, {'simulate.safe-withdrawal': 'tests.utils.test_config:SafeWithdrawalConfig'})
+
+    validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 30\n'))
+
+    assert command_config(get_config(), SafeWithdrawalConfig).years == 30
+
+def test_should_reject_plugin_section_when_not_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _install_models(monkeypatch, {})
+
+    with pytest.raises(ConfigValidationError, match=r'commands\.simulate\.safe-withdrawal'):
+        validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 30\n'))
+
+def test_should_reject_unknown_key_in_plugin_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _install_models(monkeypatch, {'simulate.safe-withdrawal': 'tests.utils.test_config:SafeWithdrawalConfig'})
+
+    with pytest.raises(ConfigValidationError, match=r'commands\.simulate\.safe-withdrawal\.unknown'):
+        validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nunknown = 1\n'))
+
+def test_should_mount_multiple_plugins_into_same_group(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _install_models(monkeypatch, {
+        'simulate.safe-withdrawal': 'tests.utils.test_config:SafeWithdrawalConfig',
+        'simulate.monte-carlo': 'tests.utils.test_config:MonteCarloConfig',
+    })
+
+    validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 25\n[commands.simulate.monte-carlo]\nquota = 0.3\n'))
+
+    assert command_config(get_config(), SafeWithdrawalConfig).years == 25
+    assert command_config(get_config(), MonteCarloConfig).quota == pytest.approx(0.3)
+
+def test_should_skip_plugin_colliding_with_core_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    _install_models(monkeypatch, {'view.accounts': 'tests.utils.test_config:SafeWithdrawalConfig'})
+
+    with caplog.at_level(logging.ERROR):
+        validated_toml_loader(_write_config(tmp_path, '[commands.view.accounts]\nfields = ["Name"]\n'))
+
+    assert 'commands.view.accounts' in caplog.text
+    assert command_config(get_config(), ViewAccountsConfig).fields == ['Name']  # the core section stays authoritative
+
+def test_should_skip_plugin_that_is_not_a_config_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    _install_models(monkeypatch, {
+        'simulate.broken': 'tests.utils.test_config:NOT_A_MODEL',
+        'simulate.safe-withdrawal': 'tests.utils.test_config:SafeWithdrawalConfig',
+    })
+
+    with caplog.at_level(logging.ERROR):
+        validated_toml_loader(_write_config(tmp_path, '[commands.simulate.safe-withdrawal]\nyears = 40\n'))
+
+    assert command_config(get_config(), SafeWithdrawalConfig).years == 40
+    assert 'simulate.broken' in caplog.text

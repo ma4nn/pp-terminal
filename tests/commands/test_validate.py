@@ -32,6 +32,7 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from pp_terminal.commands.validate import run_validations
+from pp_terminal.utils.config import load_config
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import AccountType, TransactionType
 from pp_terminal.main import app
@@ -103,7 +104,7 @@ def provide_sample_portfolio_with_securities() -> Portfolio:
 
 def _make_ctx(portfolio: Portfolio, config: dict[str, Any]) -> Mock:
     ctx = Mock()
-    ctx.obj = SimpleNamespace(portfolio=portfolio, config=config)
+    ctx.obj = SimpleNamespace(portfolio=portfolio, config=load_config(config))
     return ctx
 
 
@@ -237,7 +238,7 @@ def test_entity_specific_rule(sample_portfolio_with_limits: Portfolio) -> None:
 
 def test_attribute_based_rule(sample_portfolio_with_limits: Portfolio) -> None:
     """Test balance-limit-from-attribute rule type."""
-    test_attr_uuid = 'test-attr-uuid-12345'
+    test_attr_uuid = '11111111-1111-1111-1111-111111111111'
     portfolio = _with_account_attribute(sample_portfolio_with_limits, test_attr_uuid, {'account-1': 1000.0})
 
     ctx = _make_ctx(portfolio, {'commands': {'validate': {'accounts': {'rules': [
@@ -294,7 +295,7 @@ def test_date_passed_with_friendly_name(sample_portfolio_with_limits: Portfolio,
     """Test that date-passed-from-attribute shows friendly attribute name in message."""
     caplog.set_level(logging.ERROR)
 
-    test_attr_uuid = 'test-date-attr-uuid-12345'
+    test_attr_uuid = '22222222-2222-2222-2222-222222222222'
     portfolio = _with_account_attribute(sample_portfolio_with_limits, test_attr_uuid, {'account-1': datetime(2020, 1, 1)})
 
     ctx = _make_ctx(portfolio, {'commands': {'validate': {'accounts': {'rules': [

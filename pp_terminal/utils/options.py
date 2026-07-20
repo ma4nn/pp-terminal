@@ -19,14 +19,13 @@
 import typer
 
 from pp_terminal.domain.schemas import Percent, Money
-from pp_terminal.utils.config import get_allowance
 
 
 def allowance_callback(ctx: typer.Context, param: typer.CallbackParam, value: Money | None) -> Money:  # pylint: disable=unused-argument
     # 1. If provided via CLI, use it; 2. otherwise fall back to config (or the 1000 EUR default)
     if value is not None:
         return value
-    return Money(get_allowance(ctx.obj.config))
+    return Money(ctx.obj.config.tax.allowance)
 
 
 def tax_rate_callback(ctx: typer.Context, param: typer.CallbackParam, value: Percent | None) -> Percent:  # pylint: disable=unused-argument
@@ -34,10 +33,10 @@ def tax_rate_callback(ctx: typer.Context, param: typer.CallbackParam, value: Per
     if value is not None:
         return value
 
-    # 2. Try config file
-    config_tax = ctx.obj.config.get('tax')
-    if config_tax is not None and 'rate' in config_tax:
-        return Percent(config_tax['rate'])
+    # 2. Use the config value only if the user set it explicitly (a bare default should still prompt)
+    tax = ctx.obj.config.tax
+    if 'rate' in tax.model_fields_set:
+        return Percent(tax.rate)
 
     # 3. Prompt user with 4. hard-coded default
     return Percent(typer.prompt(
@@ -52,10 +51,10 @@ def exempt_rate_callback(ctx: typer.Context, param: typer.CallbackParam, value: 
     if value is not None:
         return value
 
-    # 2. Try config file
-    config_tax = ctx.obj.config.get('tax')
-    if config_tax is not None and 'exemption-rate' in config_tax:
-        return Percent(config_tax['exemption-rate'])
+    # 2. Use the config value only if the user set it explicitly (a bare default should still prompt)
+    tax = ctx.obj.config.tax
+    if 'exemption_rate' in tax.model_fields_set:
+        return Percent(tax.exemption_rate)
 
     # 3. Prompt user with 4. hard-coded default
     return Percent(typer.prompt(

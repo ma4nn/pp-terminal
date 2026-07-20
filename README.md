@@ -86,13 +86,15 @@ The displayed columns are configurable via `[commands.view.accounts]` / `[comman
 Tax parameters (`[tax]`) and per-command assumptions (`[commands.simulate.*]`) live in the
 [configuration file](#configuration-file); run `pp-terminal init` for the fully annotated reference (CLI options take precedence).
 
-For `simulate pmt`, instead of fixed `returns` the assumed real return can be derived from your current asset allocation
-as the value-weighted average of per-class returns (holdings not assigned to a class in the taxonomy weigh in at 0%):
+For `simulate pmt`, each `returns` entry is one scenario. An entry may be a fixed rate, or a per-category
+table that is blended over your current asset allocation into a single rate (holdings not assigned to a
+category in the taxonomy weigh in at 0%). Mixing both lets you compare fixed rates against your allocation:
 ```toml
 taxonomy = "Asset Allocation"  # the Portfolio Performance taxonomy representing your asset allocation
 
 [commands.simulate.pmt]
-returns-by-class = { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }  # expected real return in percent per class
+# fixed scenarios plus one blended from the allocation; keys are taxonomy category names
+returns = [2, 4, 6, { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }]
 ```
 
 `simulate share-sell` reuses the global `taxonomy` as the default for `--preserve-allocation`, and

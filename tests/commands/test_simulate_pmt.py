@@ -22,7 +22,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
-from pp_terminal.commands.simulate_pmt import amortization_factor, blended_return_from_allocation, prepare_pmt_result, _next_step_hint
+from pp_terminal.commands.simulate_pmt import amortization_factor, blended_return_from_allocation, prepare_pmt_result, _next_step_hint, _resolve_return_scenarios
 from pp_terminal.utils.config import empty_config
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import AccountType, TransactionType
@@ -218,6 +218,20 @@ def test_blended_return_unconfigured_class_contributes_zero(portfolio_with_price
     portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [['AA', 'sec-1', 'security', 'Equity', 10000]])
 
     assert blended_return_from_allocation(portfolio, _DATE, 'AA', {'Bonds': 2.0}) == pytest.approx(0.0)
+
+
+def test_resolve_return_scenarios_mixes_fixed_and_blended(portfolio_with_prices: Portfolio) -> None:
+    portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [['AA', 'sec-1', 'security', 'Equity', 10000]])
+
+    scenarios = _resolve_return_scenarios(portfolio, 'AA', _DATE, [2.0, 6.0, {'Equity': 5.0}])
+
+    assert scenarios[:2] == [2.0, 6.0]  # fixed rates kept in order
+    assert scenarios[2] == pytest.approx(9000.0 * 5.0 / 10000.0)  # per-category entry blended into one rate
+
+
+def test_resolve_return_scenarios_per_category_entry_requires_taxonomy(portfolio_with_prices: Portfolio) -> None:
+    with pytest.raises(InputError, match="taxonomy"):
+        _resolve_return_scenarios(portfolio_with_prices, None, _DATE, [{'Equity': 5.0}])
 
 
 def test_prepare_pmt_result_negative_cash_cancels_depot(portfolio_with_prices: Portfolio) -> None:

@@ -52,5 +52,5 @@ def test_activated_template_should_validate_against_config_model() -> None:
     # guards against drift between the template and the Pydantic config models
     build_config_model().model_validate(data)
 
-    assert data['commands']['simulate']['pmt']['returns'] == [2, 4, 6]
+    assert data['commands']['simulate']['pmt']['returns'] == [2, 4, 6, {'Eigenkapital': 5.0, 'Fremdkapital': 1.9}]
     assert data['commands']['validate']['securities']['rules'][0]['type'] == 'price-staleness'

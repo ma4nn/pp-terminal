@@ -74,12 +74,13 @@ CONFIG_TEMPLATE = """\
 # --- Simulate: pmt (withdrawal plan) ---
 
 #[commands.simulate.pmt]
-# Expected annual returns in percent to simulate.
-#returns = [2, 4, 6]
+# Expected annual real returns in percent; each list entry is one scenario to compare.
+# An entry may also be a per-category table (keys are taxonomy category names, see the
+# "view taxonomies" command): it is blended over your current allocation into a single
+# rate and requires the "taxonomy" setting above, e.g.:
+#returns = [2, 4, 6, { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }]
 # End date of the withdrawal horizon.
 #end-date = 2055-12-31
-# Per-asset-class expected returns in percent (keys are taxonomy class names, see "view taxonomies" command).
-#returns-by-class = { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }
 
 # --- Simulate: share-sell ---
 

@@ -50,9 +50,8 @@ log = logging.getLogger(__name__)
 
 
 class PmtConfig(ConfigModel):
-    returns: list[Annotated[float, Field(ge=0, le=100)]] | None = None
+    returns: list[Annotated[float, Field(ge=0, le=100)] | dict[str, Annotated[float, Field(ge=0, le=100)]]] | None = None
     end_date: DateType | None = None
-    returns_by_class: dict[str, Annotated[float, Field(ge=0, le=100)]] | None = None
 
 _RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate']
 
@@ -120,8 +119,8 @@ def _account_categories(portfolio: Portfolio, balances: pd.Series, taxonomy: str
     return categories
 
 
-def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonomy: str, returns_by_class: dict[str, float]) -> Percent:
-    """Weighted average of the configured per-class real returns over the taxonomy's current allocation,
+def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonomy: str, returns_by_category: dict[str, float]) -> Percent:
+    """Weighted average of the configured per-category real returns over the taxonomy's current allocation,
     covering both securities and deposit accounts; unclassified items weigh in at 0%."""
     snapshot = PortfolioSnapshot(portfolio, date)
     security_values = snapshot.values.groupby('securityId').sum()
@@ -131,16 +130,32 @@ def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonom
     if total <= 0:
         raise InputError("The portfolio has no positive value to derive a return from")
 
-    class_values = pd.concat([
+    category_values = pd.concat([
         security_values.groupby(_security_categories(portfolio, security_values, taxonomy)).sum(),
         account_values.groupby(_account_categories(portfolio, account_values, taxonomy)).sum(),
     ]).groupby(level=0).sum()
-    class_returns = pd.Series({str(category): returns_by_class.get(str(category)) for category in class_values.index}, dtype='float64')
-    missing = sorted(class_returns[class_returns.isna()].index)
+    category_returns = pd.Series({str(category): returns_by_category.get(str(category)) for category in category_values.index}, dtype='float64')
+    missing = sorted(category_returns[category_returns.isna()].index)
     if missing:
-        log.warning("No return configured for taxonomy classes, assuming 0%%: %s", ', '.join(missing))
+        log.warning("No return configured for taxonomy categories, assuming 0%%: %s", ', '.join(missing))
 
-    return Percent(float((class_values * class_returns.fillna(0.0)).sum() / total))
+    return Percent(float((category_values * category_returns.fillna(0.0)).sum() / total))
+
+
+def _resolve_return_scenarios(
+        portfolio: Portfolio, taxonomy: str | None, date: datetime, scenarios: list[float | dict[str, float]]
+) -> list[Percent]:
+    """One assumed return per configured scenario: a fixed rate is taken as is, a per-category
+    map is blended over the current allocation (which requires a configured taxonomy)."""
+    resolved: list[Percent] = []
+    for scenario in scenarios:
+        if isinstance(scenario, dict):
+            if not taxonomy:
+                raise InputError("A per-category 'returns' entry requires the 'taxonomy' setting")
+            resolved.append(blended_return_from_allocation(portfolio, date, taxonomy, scenario))
+        else:
+            resolved.append(Percent(scenario))
+    return resolved
 
 
 def _taxable_position(
@@ -249,11 +264,7 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
         date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     if not assumed_returns:
-        assumed_returns = [Percent(value) for value in (pmt.returns or [])]
-    if not assumed_returns:
-        taxonomy = config.taxonomy
-        if taxonomy and pmt.returns_by_class:
-            assumed_returns = [blended_return_from_allocation(portfolio, date, taxonomy, pmt.returns_by_class)]
+        assumed_returns = _resolve_return_scenarios(portfolio, config.taxonomy, date, pmt.returns or [])
     if not assumed_returns:
         assumed_returns = [Percent(typer.prompt("Expected Annual Real Return (%)", type=click.FloatRange(0, 100)))]
     if end_date is None and pmt.end_date is not None:

@@ -18,12 +18,12 @@
 """
 
 import logging
+from importlib.metadata import version
 
 import pytest
 from _pytest.fixtures import TopRequest
 from typer.testing import CliRunner
 
-from pp_terminal import __version__
 from pp_terminal.main import app
 
 
@@ -33,7 +33,7 @@ def test_should_print_version() -> None:
     result = runner.invoke(app, ['--version'])
 
     assert result.exit_code == 0
-    assert f'version: {__version__}' in result.output
+    assert f'version: {version("pp-terminal")}' in result.output
 
 def test_should_abort_without_traceback_on_malformed_xml(request: TopRequest, caplog: pytest.LogCaptureFixture) -> None:
     runner = CliRunner()

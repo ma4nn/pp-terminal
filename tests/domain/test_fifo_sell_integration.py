@@ -27,7 +27,7 @@ from pp_terminal.data.filters import filter_by_account_and_security
 from pp_terminal.domain.cost_basis import SellContext, calculate_fifo_sell
 
 from pp_terminal.domain.portfolio import Portfolio
-from pp_terminal.domain.schemas import TransactionSchema
+from pp_terminal.domain.schemas import SecurityPriceSchema, TransactionSchema
 from pp_terminal.data.tax import calculate_prepaid_tax_per_lot, load_prepaid_tax_data_from_csv
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
@@ -245,7 +245,7 @@ def test_exempt_rate_applied_to_total_capital_gain() -> None:
         (pd.Timestamp('2020-01-01'), 'acc-1', 'sec-1')
     ], names=['date', 'accountId', 'securityId']))
 
-    portfolio = Portfolio(accounts, transactions, securities, pd.DataFrame())
+    portfolio = Portfolio(accounts, transactions, securities, SecurityPriceSchema.empty())
 
     # CSV with VAP deemed income: deemed_income = 100€/year total, 1€ per share
     # Note: Exemption rate is now applied during sell calculation, not during CSV loading

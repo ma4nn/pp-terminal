@@ -65,7 +65,14 @@ class AccountType(Enum):
     DEPOSIT = "account"
 
 
-class TransactionSchema(pa.DataFrameModel):
+class _CoercingSchema(pa.DataFrameModel):
+    """Base schema that coerces dtypes on validation; our DataFrames come from SQL/computation as object dtype."""
+
+    class Config:  # pylint: disable=too-few-public-methods
+        coerce = True
+
+
+class TransactionSchema(_CoercingSchema):
     date: Index[pa.DateTime]
     accountId: Index[str]
     securityId: Index[str] = pa.Field(nullable=True)
@@ -78,7 +85,7 @@ class TransactionSchema(pa.DataFrameModel):
     currency: Series[str] = pa.Field(nullable=True)
 
 
-class AccountSchema(pa.DataFrameModel):
+class AccountSchema(_CoercingSchema):
     accountId: Index[str]
     name: Series[str]
     type: Series[str]  # @todo use pandera preprocessing?
@@ -95,7 +102,7 @@ class Security(BaseModel):  # pylint: disable=too-few-public-methods
     isRetired: Optional[bool] = pa.Field(coerce=True)
     additionalAttributes: dict[str, Any] = {}
 
-class SecuritySchema(pa.DataFrameModel):
+class SecuritySchema(_CoercingSchema):
     securityId: Index[str]
     name: Series[str]
     wkn: Series[str] = pa.Field(nullable=True)
@@ -104,19 +111,19 @@ class SecuritySchema(pa.DataFrameModel):
     isRetired: Optional[Series[bool]] = pa.Field(coerce=True)
 
 
-class SecurityPriceSchema(pa.DataFrameModel):
+class SecurityPriceSchema(_CoercingSchema):
     date: Index[pa.DateTime]
     securityId: Index[str]
     price: Series[Money]
 
 
-class TaxPaidSchema(pa.DataFrameModel):
+class TaxPaidSchema(_CoercingSchema):
     year: Index[int] = pa.Field(coerce=True)
     security_id: Index[str]
     deemed_income: Series[Money]
 
 
-class TaxLotSchema(pa.DataFrameModel):
+class TaxLotSchema(_CoercingSchema):
     date: Index[pa.DateTime]
     accountId: Index[str]
     securityId: Index[str]
@@ -141,7 +148,7 @@ class TaxLotSellSchema(TaxLotSchema):
     netProceeds: Series[Money]
 
 
-class InterestResultSchema(pa.DataFrameModel):
+class InterestResultSchema(_CoercingSchema):
     """Schema for interest calculation results."""
     accountId: Index[str]
     name: Series[str]
@@ -161,13 +168,12 @@ class InterestResultSchema(pa.DataFrameModel):
         return df
 
 
-class VapResultSchema(pa.DataFrameModel):
+class VapResultSchema(_CoercingSchema):
     """Schema for Vorabpauschale (VAP) calculation results."""
-    wkn: Series[str] = pa.Field(nullable=True, coerce=True)
-    name: Series[str] = pa.Field(coerce=True)
-    currency: Series[str] = pa.Field(coerce=True)
+    wkn: Series[str] = pa.Field(nullable=True)
+    name: Series[str]
+    currency: Series[str]
 
     class Config:  # pylint: disable=too-few-public-methods
         """Allow additional columns for dynamic account names."""
         strict = False  # Allow additional columns beyond those defined
-        coerce = True

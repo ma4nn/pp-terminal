@@ -30,7 +30,7 @@ import typer
 from pandera.typing import DataFrame
 from pydantic import Field
 
-from pp_terminal.data.filters import filter_by_account_and_security
+from pp_terminal.data.filters import filter_by_account_and_security, retired_row_labels
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.allocation import build_category_map
 from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots
@@ -119,12 +119,21 @@ def _account_categories(portfolio: Portfolio, balances: pd.Series, taxonomy: str
     return categories
 
 
+def _active_account_balances(snapshot: PortfolioSnapshot) -> pd.Series:
+    """Deposit-account balances excluding retired accounts, which no longer back a withdrawal."""
+    balances = snapshot.balances
+    retired = retired_row_labels(snapshot.portfolio.deposit_accounts)
+    if not retired:
+        return balances
+    return balances[~balances.index.get_level_values('accountId').isin(retired)]
+
+
 def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonomy: str, returns_by_category: dict[str, float]) -> Percent:
     """Weighted average of the configured per-category real returns over the taxonomy's current allocation,
     covering both securities and deposit accounts; unclassified items weigh in at 0%."""
     snapshot = PortfolioSnapshot(portfolio, date)
     security_values = snapshot.values.groupby('securityId').sum()
-    account_values = snapshot.balances.groupby('accountId').sum()
+    account_values = _active_account_balances(snapshot).groupby('accountId').sum()
 
     total = security_values.sum() + account_values.sum()
     if total <= 0:
@@ -204,7 +213,7 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
 
     snapshot = PortfolioSnapshot(portfolio, date)
     market_value, taxable_gain = _taxable_position(snapshot, tax_rate, Percent(config.tax.exemption_rate), tax_csv_data)
-    cash = Money(snapshot.balances.sum())
+    cash = Money(_active_account_balances(snapshot).sum())
 
     if market_value == 0 and cash == 0:
         return pd.DataFrame()
@@ -295,7 +304,7 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
         TableOptions(title=f"Amortization Withdrawal on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=False)
     ))
 
-    cash = Money(PortfolioSnapshot(portfolio, date).balances.sum())
+    cash = Money(_active_account_balances(PortfolioSnapshot(portfolio, date)).sum())
     net = Money(result.iloc[0]['netPerYear']) if len(result) == 1 else None
     console.print(output.hint(_next_step_hint(net, cash)))
     console.print(output.hint(

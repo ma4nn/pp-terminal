@@ -18,6 +18,7 @@
 """
 
 from datetime import datetime
+import logging
 
 import pandas as pd
 import pytest
@@ -35,9 +36,9 @@ _HORIZON_YEARS = (_END_DATE - _DATE).days / 365.25
 _TAX_RATE = 26.375
 
 
-def _deposit_account(amount: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _deposit_account(amount: float, retired: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     accounts = pd.DataFrame([
-        ['Cash Account', AccountType.DEPOSIT.value, None, False, 'EUR'],
+        ['Cash Account', AccountType.DEPOSIT.value, None, retired, 'EUR'],
     ], columns=['name', 'type', 'referenceAccount', 'isRetired', 'currency'], index=['dep-1'])
     accounts.index.name = 'accountId'
 
@@ -177,8 +178,8 @@ def test_next_step_hint_multiple_rates_uses_placeholder() -> None:
     assert '--target-net <netPerYear>' in hint
 
 
-def _with_cash_and_taxonomy(portfolio: Portfolio, cash: float, assignment_rows: list[list[object]]) -> Portfolio:
-    deposit_accounts, deposit_transactions = _deposit_account(cash)
+def _with_cash_and_taxonomy(portfolio: Portfolio, cash: float, assignment_rows: list[list[object]], retired: bool = False) -> Portfolio:
+    deposit_accounts, deposit_transactions = _deposit_account(cash, retired=retired)
     assignments = pd.DataFrame(assignment_rows, columns=['taxonomyName', 'itemId', 'itemType', 'categoryName', 'weight'])
     return Portfolio(
         accounts=pd.concat([portfolio.securities_accounts, deposit_accounts]),
@@ -220,6 +221,16 @@ def test_blended_return_unconfigured_class_contributes_zero(portfolio_with_price
     assert blended_return_from_allocation(portfolio, _DATE, 'AA', {'Bonds': 2.0}) == pytest.approx(0.0)
 
 
+def test_blended_return_excludes_retired_cash_without_warning(portfolio_with_prices: Portfolio, caplog: pytest.LogCaptureFixture) -> None:
+    portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [['AA', 'sec-1', 'security', 'Equity', 10000]], retired=True)
+
+    with caplog.at_level(logging.WARNING):
+        blended = blended_return_from_allocation(portfolio, _DATE, 'AA', {'Equity': 5.0})
+
+    assert blended == pytest.approx(5.0)  # retired cash neither dilutes the blend...
+    assert 'not classified' not in caplog.text  # ...nor triggers the unclassified-account warning
+
+
 def test_resolve_return_scenarios_mixes_fixed_and_blended(portfolio_with_prices: Portfolio) -> None:
     portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [['AA', 'sec-1', 'security', 'Equity', 10000]])
 
@@ -232,6 +243,21 @@ def test_resolve_return_scenarios_mixes_fixed_and_blended(portfolio_with_prices:
 def test_resolve_return_scenarios_per_category_entry_requires_taxonomy(portfolio_with_prices: Portfolio) -> None:
     with pytest.raises(InputError, match="taxonomy"):
         _resolve_return_scenarios(portfolio_with_prices, None, _DATE, [{'Equity': 5.0}])
+
+
+def test_prepare_pmt_result_ignores_retired_cash(portfolio_with_prices: Portfolio) -> None:
+    deposit_accounts, deposit_transactions = _deposit_account(100000.0, retired=True)
+    portfolio = Portfolio(
+        accounts=pd.concat([portfolio_with_prices.securities_accounts, deposit_accounts]),
+        transactions=pd.concat([portfolio_with_prices.securities_account_transactions, deposit_transactions]),
+        securities=portfolio_with_prices.securities,
+        prices=portfolio_with_prices.prices,
+    )
+
+    result = prepare_pmt_result(portfolio, empty_config(), _DATE, _TAX_RATE, [5.0], _END_DATE, allowance=0.0)
+
+    # retired cash must not inflate the withdrawal base: identical to the securities-only result (9000 market value)
+    assert result.iloc[0]['grossPerYear'] == pytest.approx(9000.0 * amortization_factor(0.05, _HORIZON_YEARS))
 
 
 def test_prepare_pmt_result_negative_cash_cancels_depot(portfolio_with_prices: Portfolio) -> None:

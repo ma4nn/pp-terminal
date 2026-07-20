@@ -160,6 +160,29 @@ def test_summarize_sell_plan_carries_asset_class_when_present() -> None:
     assert list(plan['securityName']) == ['ETF A', 'ETF B']  # two securities kept distinct within the class
 
 
+def test_summarize_sell_plan_carries_class_share_without_summing_it() -> None:
+    """classShare is a per-class weight; the plan must keep it constant per class, not sum it across securities."""
+    lots = _sell_lots([
+        {'assetClass': 'Equity', 'classShare': 0.6, 'securityName': 'ETF A', 'isin': 'W1', 'account': 'Depot',
+         'currency': 'EUR', 'shares': 4.0, 'purchasePrice': 100.0, 'salePrice': 120.0, 'costBasis': 400.0,
+         'fees': 2.0, 'grossProceeds': 480.0, 'capitalGain': 80.0, 'deemedIncome': 1.0, 'taxableGain': 79.0,
+         'totalTax': 20.0, 'netProceeds': 460.0},
+        {'assetClass': 'Equity', 'classShare': 0.6, 'securityName': 'ETF B', 'isin': 'W2', 'account': 'Depot',
+         'currency': 'EUR', 'shares': 5.0, 'purchasePrice': 50.0, 'salePrice': 55.0, 'costBasis': 250.0,
+         'fees': 1.0, 'grossProceeds': 275.0, 'capitalGain': 25.0, 'deemedIncome': 0.0, 'taxableGain': 25.0,
+         'totalTax': 6.0, 'netProceeds': 269.0},
+        {'assetClass': 'Bonds', 'classShare': 0.4, 'securityName': 'ETF C', 'isin': 'W3', 'account': 'Depot',
+         'currency': 'EUR', 'shares': 3.0, 'purchasePrice': 30.0, 'salePrice': 33.0, 'costBasis': 90.0,
+         'fees': 0.5, 'grossProceeds': 99.0, 'capitalGain': 9.0, 'deemedIncome': 0.0, 'taxableGain': 9.0,
+         'totalTax': 2.0, 'netProceeds': 97.0},
+    ])
+
+    plan = summarize_sell_plan(lots)
+
+    assert list(plan.columns)[-1] == 'classShare'
+    assert list(plan['classShare']) == pytest.approx([0.6, 0.6, 0.4])
+
+
 def test_summarize_sell_plan_keeps_securities_without_isin() -> None:
     """A security without an ISIN (e.g. crypto) must not be dropped, or the plan total under-reports."""
     lots = _sell_lots([

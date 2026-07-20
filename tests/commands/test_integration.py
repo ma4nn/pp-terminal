@@ -163,6 +163,137 @@ def test_share_sell_preserve_allocation(request: TopRequest) -> None:
     assert all(row.get('assetClass') for row in rows)  # taxonomy category surfaced on every row
 
 
+def test_share_sell_preserve_allocation_reports_class_share(request: TopRequest) -> None:
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(fixtures_dir / 'kommer.toml'),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'share-sell',
+        '--target-net', '1000',
+        '--preserve-allocation', 'Anlagekategorien',
+        '--tax-rate', '26.375',
+        '--allowance', '0'
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert rows and all('classShare' in row for row in rows)
+
+    total_gross = sum(row['grossProceeds'] for row in rows)
+    class_gross: dict[str, float] = {}
+    for row in rows:
+        class_gross[row['assetClass']] = class_gross.get(row['assetClass'], 0.0) + row['grossProceeds']
+
+    for row in rows:  # every row carries its own class's share of total gross proceeds
+        assert row['classShare'] == pytest.approx(class_gross[row['assetClass']] / total_gross)
+
+    distinct_shares = {row['assetClass']: row['classShare'] for row in rows}
+    assert sum(distinct_shares.values()) == pytest.approx(1.0)  # classes partition the whole sale
+
+
+def test_share_sell_uses_configured_taxonomy_for_preserve_allocation(request: TopRequest, tmp_path: Path) -> None:
+    """A target-net run picks up the configured taxonomy, so --preserve-allocation need not be repeated."""
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+    config_file = tmp_path / 'config.toml'
+    config_file.write_text('taxonomy = "Anlagekategorien"\n', encoding='utf-8')
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(config_file),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'share-sell',
+        '--target-net', '1000',
+        '--tax-rate', '26.375',
+        '--allowance', '0',
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert rows and all(row.get('assetClass') for row in rows)  # allocation preserved via the configured taxonomy
+    assert all('classShare' in row for row in rows)
+
+
+def test_share_sell_configured_taxonomy_ignored_without_target_net(request: TopRequest, tmp_path: Path) -> None:
+    """Without a target net the configured taxonomy must not force allocation preservation (plain listing still works)."""
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+    config_file = tmp_path / 'config.toml'
+    config_file.write_text('taxonomy = "Anlagekategorien"\n', encoding='utf-8')
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(config_file),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'share-sell',
+        '--tax-rate', '26.375',
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert rows and not any('assetClass' in row for row in rows)  # no preservation, no asset-class enrichment
+
+
+def test_share_sell_reads_min_amount_from_config(request: TopRequest, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """The per-order floor can be configured, matching the behavior of an explicit --min-amount."""
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+    config_file = tmp_path / 'config.toml'
+    config_file.write_text(
+        'taxonomy = "Anlagekategorien"\n'
+        '[commands.simulate.share-sell]\n'
+        'min-amount = 500\n',
+        encoding='utf-8'
+    )
+
+    with caplog.at_level(logging.WARNING, logger='pp_terminal.commands.simulate_share_sell'):
+        result = runner.invoke(app, [
+            '--file', str(fixtures_dir / 'kommer.ids.xml'),
+            '--config', str(config_file),
+            '--output', 'json',
+            '--no-cache',
+            'simulate', 'share-sell',
+            '--target-net', '1000',
+            '--tax-rate', '26.375',
+            '--allowance', '0',
+        ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+
+    rows = json.loads(result.output)
+    assert sum(row['netProceeds'] for row in rows) == pytest.approx(1000.0, abs=1.0)  # target still met
+    assert 'were left unsold' in caplog.text  # configured floor applied, small classes reported
+
+
+def test_share_sell_configured_min_amount_ignored_without_preserve_allocation(request: TopRequest, tmp_path: Path) -> None:
+    """A configured floor without any taxonomy in effect must not force preserve-allocation (no spurious error)."""
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+    config_file = tmp_path / 'config.toml'
+    config_file.write_text('[commands.simulate.share-sell]\nmin-amount = 500\n', encoding='utf-8')
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--config', str(config_file),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'share-sell',
+        '--tax-rate', '26.375',
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert json.loads(result.output)  # plain listing still works
+
+
 def test_share_sell_preserve_allocation_summary_keeps_asset_class(request: TopRequest) -> None:
     runner = CliRunner()
     fixtures_dir = request.path.parent.parent / 'fixtures'

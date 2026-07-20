@@ -94,12 +94,14 @@ class _MountConflict(Exception):
 
 def _core_command_models() -> dict[str, type[ConfigModel]]:
     from pp_terminal.commands.simulate_pmt import PmtConfig  # pylint: disable=import-outside-toplevel,cyclic-import
+    from pp_terminal.commands.simulate_share_sell import ShareSellConfig  # pylint: disable=import-outside-toplevel,cyclic-import
     from pp_terminal.commands.view_accounts import ViewAccountsConfig  # pylint: disable=import-outside-toplevel,cyclic-import
     from pp_terminal.commands.view_securities import ViewSecuritiesConfig  # pylint: disable=import-outside-toplevel,cyclic-import
     from pp_terminal.validation.rules import ValidateConfig  # pylint: disable=import-outside-toplevel,cyclic-import
 
     return {
         'simulate.pmt': PmtConfig,
+        'simulate.share-sell': ShareSellConfig,
         'validate': ValidateConfig,
         'view.accounts': ViewAccountsConfig,
         'view.securities': ViewSecuritiesConfig,

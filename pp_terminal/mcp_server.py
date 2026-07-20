@@ -356,6 +356,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         Uses latest known prices. Each row is one FIFO lot showing: securityName, isin, purchase date,
         shares to sell, currency, purchasePrice, costBasis, fees, salePrice, grossProceeds,
         capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax, netProceeds.
+        With a taxonomy each row also carries assetClass and classShare (the class's share of total gross proceeds).
 
         Args:
             target_net: Target net proceeds to realize (required)

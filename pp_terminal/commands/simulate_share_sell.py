@@ -20,12 +20,13 @@
 from datetime import datetime
 import logging
 from pathlib import Path
-from typing import cast
+from typing import cast, Any
 from typing_extensions import Annotated
 
 import pandas as pd
 import typer
 from pandera.typing import DataFrame
+from pydantic import Field
 
 from pp_terminal.data.filters import filter_by_account_and_security, filter_by_security, filter_by_account
 from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots, finalize_sell_lots, apply_allowance
@@ -33,18 +34,23 @@ from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.sell_strategy import SellStrategy, FixedSharesStrategy, MinTaxStrategy, AllocationPreservingStrategy
 from pp_terminal.domain.allocation import build_category_map
 from pp_terminal.exceptions import InputError
-from pp_terminal.utils.config import Config
-from pp_terminal.utils.helper import footer
+from pp_terminal.utils.config import Config, ConfigModel, command_config
+from pp_terminal.utils.helper import footer, format_percent
 from pp_terminal.utils.options import tax_rate_callback, allowance_callback
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
 from pp_terminal.domain.schemas import Percent, Money, TaxPaidSchema
-from pp_terminal.output.table_decorator import TableOptions
+from pp_terminal.output.table_decorator import TableOptions, format_value
 
 app = typer.Typer()
 console = Console()
 log = logging.getLogger(__name__)
+
+
+class ShareSellConfig(ConfigModel):
+    min_amount: Annotated[Money, Field(gt=0)] | None = None
+
 
 _RESULT_COLUMNS = ['securityName', 'isin', 'account', 'date', 'shares', 'currency', 'purchasePrice', 'costBasis',
                    'fees', 'salePrice', 'grossProceeds', 'capitalGain', 'deemedIncome',
@@ -65,10 +71,14 @@ _PLAN_DISPLAY_COLUMNS = ['securityName', 'isin', 'account', 'shares', 'currency'
 def summarize_sell_plan(lots: pd.DataFrame) -> pd.DataFrame:
     """Collapse the per-lot sell rows into one actionable order per security."""
     with_class = 'assetClass' in lots.columns
+    with_share = 'classShare' in lots.columns
     group = ['assetClass', *_PLAN_GROUP] if with_class else _PLAN_GROUP
-    columns = ['assetClass', *_PLAN_COLUMNS] if with_class else _PLAN_COLUMNS
+    columns = ['assetClass', *_PLAN_COLUMNS] if with_class else list(_PLAN_COLUMNS)
     aggregations: dict[str, str] = {column: 'sum' for column in _PLAN_SUM_COLUMNS}
     aggregations['salePrice'] = 'first'  # constant across a security's lots
+    if with_share:
+        aggregations['classShare'] = 'first'  # constant across an asset class
+        columns = [*columns, 'classShare']
     # dropna=False keeps securities without an ISIN (e.g. crypto), otherwise their proceeds vanish from the total
     grouped = lots.assign(weightedCost=lots['purchasePrice'] * lots['shares']).groupby(group, sort=False, dropna=False)
     plan = grouped.agg({**aggregations, 'weightedCost': 'sum'})
@@ -78,6 +88,14 @@ def summarize_sell_plan(lots: pd.DataFrame) -> pd.DataFrame:
 
 def get_today() -> datetime:
     return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _format_share_sell_value(value: Any, column_name: str, row: pd.Series) -> str:
+    if column_name == 'classShare':
+        if row.isin(['Total']).any():
+            return format_percent(1.0)  # all asset classes together are the whole sale
+        return format_percent(value) if isinstance(value, float) else ''
+    return format_value(value, column_name, row)
 
 
 def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
@@ -156,7 +174,9 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
     columns, sort_keys = _RESULT_COLUMNS, ['securityName', 'date']
     if taxonomy:
         result['assetClass'] = result['securityId'].map(category_by_security).fillna('(unclassified)')
-        columns, sort_keys = ['assetClass', *_RESULT_COLUMNS], ['assetClass', *sort_keys]
+        class_gross = result.groupby('assetClass')['grossProceeds'].transform('sum')
+        result['classShare'] = class_gross / result['grossProceeds'].sum()
+        columns, sort_keys = ['assetClass', *_RESULT_COLUMNS, 'classShare'], ['assetClass', *sort_keys]
 
     return result.sort_values(sort_keys)[columns]
 
@@ -233,8 +253,8 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
         shares: Annotated[float | None, typer.Option(help="Number of shares to sell (only with --security-id)", min=0.0001)] = None,
         price: Annotated[Money | None, typer.Option(help="Sale price per share (only with --security-id)", min=0.0001)] = None,
         target_net: Annotated[Money | None, typer.Option("--target-net", help="Target net proceeds to realize (minimizes taxes)", min=0.01)] = None,
-        taxonomy: Annotated[str | None, typer.Option("--preserve-allocation", metavar="TAXONOMY", help="Preserve the current asset allocation while reaching --target-net, using this Portfolio Performance taxonomy's classes")] = None,
-        min_amount: Annotated[Money | None, typer.Option("--min-amount", help="Minimum gross size for any sell order; smaller holdings are consolidated within their class or left unsold (only with --preserve-allocation)", min=0.01)] = None,
+        taxonomy: Annotated[str | None, typer.Option("--preserve-allocation", metavar="TAXONOMY", help="Preserve the asset allocation while reaching --target-net using this taxonomy's classes; defaults to config")] = None,
+        min_amount: Annotated[Money | None, typer.Option("--min-amount", help="Minimum gross size per sell order; small holdings consolidate within their class or stay unsold (preserve-allocation only); defaults to config", min=0.01)] = None,
         summary: Annotated[bool, typer.Option("--summary", help="Aggregate the FIFO lots into one row per security (an actionable sell plan)")] = False,
         allowance: Annotated[Money, typer.Option("--allowance", help="Sparerpauschbetrag still available this year; defaults to config (1000 EUR, use 2000 for joint assessment)", min=0, callback=allowance_callback)] = None,  # type: ignore
         tax_csv: Annotated[Path | None, typer.Option(help="CSV file with paid tax per share data")] = None
@@ -246,6 +266,14 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
     portfolio = cast(Portfolio, ctx.obj.portfolio)
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
+
+    # fall back to the globally configured taxonomy so a target-net run preserves the allocation
+    # without repeating --preserve-allocation; it has no effect (and no cost) without a target net
+    if taxonomy is None and target_net is not None:
+        taxonomy = config.taxonomy
+    # the order floor only makes sense while preserving an allocation, so pull it from config only then
+    if min_amount is None and taxonomy is not None:
+        min_amount = command_config(config, ShareSellConfig).min_amount
 
     _validate_options(security_id, shares, price, target_net, taxonomy, min_amount)
 
@@ -267,12 +295,14 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
     if summary:
         result = summarize_sell_plan(result)
         lead = ['assetClass'] if 'assetClass' in result.columns else []
-        result = result[lead + _PLAN_DISPLAY_COLUMNS]
+        trail = ['classShare'] if 'classShare' in result.columns else []
+        result = result[lead + _PLAN_DISPLAY_COLUMNS + trail]
 
     title = "Share Sale Plan" if summary else "Share Sale Simulation"
     console.print(*output.result_table(
         result,
-        TableOptions(title=f"{title} on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=True)
+        TableOptions(title=f"{title} on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=True,
+                     value_formatter=_format_share_sell_value)
     ))
 
     allowance_note = f'Applies your Sparerpauschbetrag of up to {allowance:.2f} against taxable gains. ' if allowance > 0 else ''

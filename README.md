@@ -114,6 +114,15 @@ end-date = 2055-12-31
 returns-by-class = { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }  # expected real return in percent per class
 ```
 
+`simulate share-sell` reuses the global `taxonomy` as the default for `--preserve-allocation`, and its per-order
+floor can be configured too (command-line options take precedence):
+```toml
+taxonomy = "Asset Allocation"  # global: used as the default --preserve-allocation
+
+[commands.simulate.share-sell]
+min-amount = 500  # minimum gross size per sell order (EUR); smaller holdings are consolidated or left unsold
+```
+
 ### Validate Data
 
 | Command    | Description                                      |

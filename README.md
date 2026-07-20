@@ -70,11 +70,9 @@ pp-terminal mcp
 | `view securities` | Get detailed information about the securities                                          |
 | `view taxonomies` | Get detailed information about the taxonomies                                          |
 
-The commands can be customized in the [configuration file](#configuration-file):
-```toml
-[commands.view.accounts]
-fields = ["AccountId", "Name", "Balance"]  # call with --fields=xx to see a list of all available fields
-```
+The displayed columns are configurable via `[commands.view.accounts]` / `[commands.view.securities]` in the
+[configuration file](#configuration-file) — run `pp-terminal init` for the field reference, and call a command with
+`--fields=xx` to list all available fields.
 
 ### Simulate Scenarios
 
@@ -85,43 +83,20 @@ fields = ["AccountId", "Name", "Balance"]  # call with --fields=xx to see a list
 | `simulate share-sell` | Calculate gains and taxes if a security would be sold in future (based on FIFO capital gains)      |
 | `simulate vap`        | Run a simulation for the expected German preliminary tax ("Vorabpauschale") on the portfolio       |
 
-The tax configuration for the simulations can be customized in the [configuration file](#configuration-file):
-```toml
-[tax]
-rate = 26.375  # tax rate percentage
-# optionally define the already paid taxes per share (e.g. for the share-sell command)
-files = ["taxes_paid.csv"]  # Format: isin;year;deemed_income_per_share
-exemption-rate = 30  # percentage
-exemption-rate-attribute = "b3c38686-2d22-4b5d-8e38-e61dcf6fdde3"  # for per-security exemption rates
-allowance = 1000  # Sparerpauschbetrag in EUR
-```
+Tax parameters (`[tax]`) and per-command assumptions (`[commands.simulate.*]`) live in the
+[configuration file](#configuration-file); run `pp-terminal init` for the fully annotated reference (CLI options take precedence).
 
-Default input values for `simulate pmt` can be configured as well (command-line options take precedence):
+For `simulate pmt`, instead of fixed `returns` the assumed real return can be derived from your current asset allocation
+as the value-weighted average of per-class returns (holdings not assigned to a class in the taxonomy weigh in at 0%):
 ```toml
-[commands.simulate.pmt]
-returns = [2, 4, 6]  # assumed annual real returns in percent, one result row each
-end-date = 2055-12-31  # date by which the capital should be depleted
-```
-
-Instead of fixed `returns`, the assumed return can be derived from the current asset allocation as the
-value-weighted average of per-class expected real returns. Securities and deposit accounts assigned to a
-class in the taxonomy use that class's return; unclassified ones weigh in at 0%:
-```toml
-taxonomy = "Asset Allocation"  # global: the Portfolio Performance taxonomy that represents the asset allocation
+taxonomy = "Asset Allocation"  # the Portfolio Performance taxonomy representing your asset allocation
 
 [commands.simulate.pmt]
-end-date = 2055-12-31
 returns-by-class = { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }  # expected real return in percent per class
 ```
 
-`simulate share-sell` reuses the global `taxonomy` as the default for `--preserve-allocation`, and its per-order
-floor can be configured too (command-line options take precedence):
-```toml
-taxonomy = "Asset Allocation"  # global: used as the default --preserve-allocation
-
-[commands.simulate.share-sell]
-min-amount = 500  # minimum gross size per sell order (EUR); smaller holdings are consolidated or left unsold
-```
+`simulate share-sell` reuses the global `taxonomy` as the default for `--preserve-allocation`, and
+`[commands.simulate.share-sell] min-amount` sets a per-order floor below which small holdings are consolidated or left unsold.
 
 ### Validate Data
 
@@ -134,84 +109,23 @@ Use the repeatable `--rule` option to run only specific rule types:
 pp-terminal --file depot.xml validate --rule price-staleness --rule balance-limit
 ```
 
-This is a sample of validation rules that can be configured in the [configuration file](#configuration-file):
+Rules are configured under `[commands.validate.accounts]` / `[commands.validate.securities]` as `[[...rules]]` arrays;
+`pp-terminal init` lists every rule type and field. Each rule has a `type` and an optional `severity` (`error` default,
+or `warning`), and rules run in the given order, triggering once per entity:
 ```toml
-# Note: the rules are processed in this order, each rule type only triggers once for each entity
-
-# Validate a certain bank account does not have more than a certain custody fee threshold
-[[commands.validate.accounts.rules]]
-type = "balance-limit"
-value = 25000
-applies-to = ["c9c57e01-7ea0-4e70-bed9-4656941f7687"]  # Portfolio Performance account id from the XML file
-
-# Validate that each bank account is within the deposit insurance limit
-[[commands.validate.accounts.rules]]
-type = "balance-limit"
-value = 100000
-
-# Use date attributes in Portfolio Performance to validate against (e.g. when special interest rate offers end)
-[[commands.validate.accounts.rules]]
-type = "date-passed-from-attribute"
-value = "fgdeb0dd-8bd7-47b1-ac3f-30fedd6a47e9"  # Portfolio Performance date attribute id from the XML file
-
-# Verify security prices are up-to-date
 [[commands.validate.securities.rules]]
 type = "price-staleness"
-severy = "error"  # default, can be omitted
-value = 90
-[[commands.validate.securities.rules]]
-type = "price-staleness"
-severity = "warning"
 value = 30
-
-# Validate current cost basis (FIFO) against limit, e.g. for exit taxation thresholds ("Wegzugsbesteuerung")
-[[commands.validate.securities.rules]]
-type = "cost-basis-limit"
-value = 500000.0
 severity = "warning"
-
-# Validate tax csv file
-[[commands.validate.securities.rules]]
-type = "paid-tax-validation"
-severity = "warning"
-tolerance = 0.01
 ```
 
-#### Built-in Validations
+**Built-in rule:** `negative-share-balance` runs by default (severity `warning`, tolerance `0.001` shares) and flags
+securities with a negative share balance in any account — a sign of missing or inconsistent transactions, since short
+positions aren't supported by Portfolio Performance. Configuring the rule yourself replaces the built-in default; set
+`valid-months = []` to disable it.
 
-The `negative-share-balance` security rule runs by default (severity `warning`, tolerance `0.001` shares) and flags securities
-whose share balance is negative in any securities account — an indicator of missing or inconsistent transactions, since short
-positions are not supported by Portfolio Performance. Configuring the rule yourself replaces the built-in default:
-
-```toml
-# Escalate to an error and adjust the tolerance (absolute share count)
-[[commands.validate.securities.rules]]
-type = "negative-share-balance"
-severity = "error"
-tolerance = 0.001
-
-# Or disable it entirely
-[[commands.validate.securities.rules]]
-type = "negative-share-balance"
-valid-months = []
-```
-
-#### Temporal Validation
-
-All validation rules optionally support temporal constraints through the `valid-months` configuration option. This allows rules to run only during specific months of the year:
-
-```toml
-# VAP liquidity check runs only in December and January (when VAP is calculated)
-[[commands.validate.accounts.rules]]
-type = "vap-liquidity"
-valid-months = [12, 1]  # 1=January, 12=December
-
-# Price staleness check runs only in March (e.g. for annual review)
-[[commands.validate.securities.rules]]
-type = "price-staleness"
-value = 90
-valid-months = [3]
-```
+**Temporal constraints:** every rule accepts `valid-months` (e.g. `[12, 1]`) to run only in the given calendar months —
+useful for seasonal checks like VAP liquidity in December/January.
 
 ### Export
 
@@ -224,14 +138,9 @@ Use the `--anonymize` flag to export an anonymized version:
 pp-terminal --file depot.xml --anonymize export anonymized.xml
 ```
 
-Anonymization can be customized in the [configuration file](#configuration-file):
-```toml
-[anonymize.attributes."a1b2c3d4-e5f6-7890-abcd-ef1234567890"]
-provider = "iban"  # for all available providers see https://faker.readthedocs.io/en/master/providers.html
-[anonymize.attributes."fgdeb0dd-8bd7-47b1-ac3f-30fedd6a47e9"]
-provider = "pyfloat"
-args = { min_value = 0.0, max_value = 1.0, right_digits = 2 }
-```
+Per-attribute anonymization is configured under `[anonymize.attributes."<uuid>"]` — a `provider` from
+[Faker](https://faker.readthedocs.io/en/master/providers.html) plus optional `args`; the section's presence alone enables
+anonymization. Run `pp-terminal init` for the format.
 
 ## Requirements
 
@@ -273,9 +182,11 @@ If no `--config` is given, the tool automatically loads `$XDG_CONFIG_HOME/pp-ter
 
 The CLI options always overwrite the settings in the configuration file.
 
-```toml
-file = "portfolio_performance.xml"
-precision = 4
+`pp-terminal init` prints the **complete annotated reference** — every option, commented out. The quickest start is to
+write it to the auto-loaded location and uncomment what you need:
+
+```
+mkdir -p ~/.config/pp-terminal && pp-terminal init > ~/.config/pp-terminal/config.toml
 ```
 
 ### Customize Number Formats

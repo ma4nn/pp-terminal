@@ -25,6 +25,7 @@ import logging
 import zlib
 from typing import Optional
 
+import click
 from rich import print # pylint: disable=redefined-builtin
 from rich.console import Console as RichConsole
 from rich.logging import RichHandler
@@ -101,7 +102,7 @@ def _create_anonymized_temp_file(original_file: Path) -> Path:
 @use_config(validated_config_callback)
 def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         ctx: typer.Context,
-        file: Annotated[Path, typer.Option(help="Portfolio Performance XML file.", show_default=False, exists=True, file_okay=True, dir_okay=False, readable=True)],
+        file: Annotated[Optional[Path], typer.Option(help="Portfolio Performance XML file.", show_default=False, exists=True, file_okay=True, dir_okay=False, readable=True)] = None,
         output: OutputFormat = OutputFormat.TABLE,
         precision: int = 4,
         cache: Annotated[bool, typer.Option('--cache/--no-cache', help='Create cache file for XML.')] = True,
@@ -113,9 +114,16 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         verbose: Annotated[Optional[bool], typer.Option('--verbose', help='Enable verbose logging.')] = None,
 ) -> None:
 
+    # commands like "init" bootstrap a config and thus need neither a file nor a portfolio
+    if ctx.invoked_subcommand == "init":
+        return
+
     if verbose:
         logging.basicConfig(force=True, level=logging.DEBUG, format="%(message)s", datefmt="[%X]",
                             handlers=[RichHandler(rich_tracebacks=True, show_time=False, console=RichConsole(stderr=True))])
+
+    if file is None:
+        raise click.BadParameter("no Portfolio Performance file given, pass --file or set 'file' in your config", param_hint="'--file'")
 
     set_precision(precision)
     should_anonymize = anonymize or get_config().anonymize is not None

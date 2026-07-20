@@ -293,7 +293,7 @@ To contribute improvements to _pp-terminal_ just follow these steps:
 
 1. Fork and clone this repository
 2. Run `make`
-3. Verify build with `poetry run pp-terminal --version`
+3. Verify build with `uv run pp-terminal --version`
 4. Create a new branch based on `master`: `git checkout master && git pull && git checkout -b your-patch`
 5. Implement your changes in this new branch
 6. Run `make` to verify everything is fine

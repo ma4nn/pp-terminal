@@ -24,31 +24,31 @@ dynamic = ["version"]
 
 
 [build-system]
-requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
-build-backend = "poetry_dynamic_versioning.backend"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
-[tool.poetry]
-packages = [
-    { include = "pp_terminal" },
-    { include = "ppxml2db" },
+[tool.hatch.version]
+source = "vcs"
+raw-options = { local_scheme = "no-local-version" }
+
+[tool.hatch.build.targets.wheel]
+include = ["pp_terminal", "ppxml2db"]
+exclude = ["ppxml2db/.git", "ppxml2db/Makefile", "ppxml2db/README.md", "**/__pycache__"]
+dev-mode-dirs = ["."]
+
+[tool.hatch.build.targets.sdist]
+include = ["pp_terminal", "ppxml2db"]
+exclude = ["ppxml2db/.git", "ppxml2db/__pycache__"]
+
+[dependency-groups]
+dev = [
+    "pylint>=4.0.4,<5.0.0",
+    "pytest>=9.0.3,<10.0.0",
+    "mypy>=1.14.1,<2.0.0",
+    "bandit>=1.8.2,<2.0.0",
+    "mutmut>=3.4.0,<4.0.0",
+    "coverage>=7.13.1,<8.0.0",
 ]
-version = "0.0.0"
-
-[tool.poetry.group.dev.dependencies]
-pylint = "^4.0.4"
-pytest = "^9.0.3"
-mypy = "^1.14.1"
-bandit = "^1.8.2"
-mutmut = "^3.4.0"
-coverage = "^7.13.1"
-
-[tool.poetry.requires-plugins]
-poetry-dynamic-versioning = { version = ">=1.0.0,<2.0.0", extras = ["plugin"] }
-
-[tool.poetry-dynamic-versioning]
-enable = true
-bump = true
-metadata = false
 
 [tool.mutmut]
 paths_to_mutate = ["pp_terminal/"]

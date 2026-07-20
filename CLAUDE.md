@@ -61,7 +61,7 @@ Additional top-level modules (e.g. an MCP server) may live alongside `main.py`; 
 ### Setup and Build
 ```bash
 make                    # Full build: install, check, test, build
-make install            # Install dependencies via poetry and apply ppxml2db patch
+make install            # Install dependencies via uv and apply ppxml2db patch
 make clean              # Remove build artifacts
 ```
 
@@ -74,24 +74,24 @@ git submodule update --remote
 ### Testing
 ```bash
 make test               # Run pytest test suite
-poetry run pytest       # Run pytest directly
+uv run pytest           # Run pytest directly
 ```
 
 Test fixtures are in `tests/fixtures/` with sample Portfolio Performance XML files.
 
 ### Code Quality
 ```bash
-make check              # Run all checks: poetry check, pylint, bandit, mypy
-poetry run pylint pp_terminal tests
-poetry run bandit -c bandit.yaml -r pp_terminal tests
-poetry run mypy .
+make check              # Run all checks: uv lock --check, pylint, bandit, mypy
+uv run pylint pp_terminal tests
+uv run bandit -c bandit.yaml -r pp_terminal tests
+uv run mypy .
 ```
 
 ### Running Locally
 ```bash
-poetry run pp-terminal --version
-poetry run pp-terminal --file=depot.xml view accounts
-poetry run pp-terminal --file=depot.xml --debug view accounts  # Debug mode with SQLite cache
+uv run pp-terminal --version
+uv run pp-terminal --file=depot.xml view accounts
+uv run pp-terminal --file=depot.xml --debug view accounts  # Debug mode with SQLite cache
 ```
 
 Debug mode creates `.cache.db` for inspection.
@@ -172,7 +172,7 @@ The Portfolio Performance XML stores amounts as cents and shares/prices scaled b
 ## Configuration
 
 - Python >=3.13 required
-- Uses Poetry for dependency management
+- Uses uv for dependency management
 - Main dependencies: typer, pandas, rich, pandera, lxml
 - Dev dependencies: pylint, pytest, mypy, bandit
 

@@ -161,29 +161,6 @@ def finalize_sell_lots(lots: DataFrame[TaxLotSellSchema], tax_rate: Percent) -> 
     return df
 
 
-def apply_allowance(lots: DataFrame[TaxLotSellSchema], allowance: Money, tax_rate: Percent) -> DataFrame[TaxLotSellSchema]:
-    """Apply the annual Sparerpauschbetrag to the summed taxable gain of the sale.
-
-    The allowance is a portfolio-level, per-year deduction, so it reduces the aggregate taxable gain
-    (already net of Teilfreistellung and Vorabpauschale) and is distributed proportionally back across
-    the lots, keeping the per-lot rows consistent with the totals.
-    """
-    if allowance <= 0 or lots.empty:
-        return lots
-
-    df = lots.copy()
-    total_taxable = df['taxableGain'].sum()
-    if total_taxable <= 0:
-        return TaxLotSellSchema.validate(df)
-
-    factor = max(0.0, total_taxable - allowance) / total_taxable
-    df['taxableGain'] = df['taxableGain'] * factor
-    df['totalTax'] = (df['taxableGain'] * (tax_rate / 100.0)).clip(lower=0)
-    df['netProceeds'] = df['grossProceeds'] - df['totalTax']
-    df['netProceedsPerShare'] = df['netProceeds'] / df['shares']
-    return TaxLotSellSchema.validate(df)
-
-
 def calculate_fifo_sell(
         transactions: DataFrame[TransactionSchema],
         ctx: SellContext,

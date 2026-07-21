@@ -1,0 +1,207 @@
+<client id="1">
+  <version>66</version>
+  <baseCurrency>EUR</baseCurrency>
+  <securities>
+    <security id="2">
+      <uuid>sign-security-uuid-001</uuid>
+      <name>Sign Test ETF</name>
+      <currencyCode>EUR</currencyCode>
+      <feed>MANUAL</feed>
+      <prices/>
+      <wkn>SIGN01</wkn>
+      <isin>DE0000000002</isin>
+      <attributes>
+        <map/>
+      </attributes>
+      <events/>
+      <isRetired>false</isRetired>
+      <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+    </security>
+  </securities>
+  <watchlists/>
+  <accounts>
+    <account id="3">
+      <uuid>sign-account-uuid-001</uuid>
+      <name>Sign Cash Account</name>
+      <currencyCode>EUR</currencyCode>
+      <isRetired>false</isRetired>
+      <transactions>
+        <account-transaction id="4">
+          <uuid>sign-txn-deposit-001</uuid>
+          <date>2024-01-01T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>DEPOSIT</type>
+        </account-transaction>
+        <account-transaction id="5">
+          <uuid>sign-txn-removal-001</uuid>
+          <date>2024-01-02T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>REMOVAL</type>
+        </account-transaction>
+        <account-transaction id="6">
+          <uuid>sign-txn-interest-001</uuid>
+          <date>2024-01-03T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>INTEREST</type>
+        </account-transaction>
+        <account-transaction id="7">
+          <uuid>sign-txn-interest-charge-001</uuid>
+          <date>2024-01-04T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>INTEREST_CHARGE</type>
+        </account-transaction>
+        <account-transaction id="8">
+          <uuid>sign-txn-fees-001</uuid>
+          <date>2024-01-05T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>FEES</type>
+        </account-transaction>
+        <account-transaction id="9">
+          <uuid>sign-txn-fees-refund-001</uuid>
+          <date>2024-01-06T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>FEES_REFUND</type>
+        </account-transaction>
+        <account-transaction id="10">
+          <uuid>sign-txn-taxes-001</uuid>
+          <date>2024-01-07T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>TAXES</type>
+        </account-transaction>
+        <account-transaction id="11">
+          <uuid>sign-txn-tax-refund-001</uuid>
+          <date>2024-01-08T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>TAX_REFUND</type>
+        </account-transaction>
+        <account-transaction id="12">
+          <uuid>sign-txn-dividends-001</uuid>
+          <date>2024-01-09T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <security reference="2"/>
+          <shares>0</shares>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>DIVIDENDS</type>
+        </account-transaction>
+      </transactions>
+      <attributes>
+        <map/>
+      </attributes>
+      <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+    </account>
+  </accounts>
+  <portfolios>
+    <portfolio id="20">
+      <uuid>sign-portfolio-uuid-001</uuid>
+      <name>Sign Depot</name>
+      <isRetired>false</isRetired>
+      <referenceAccount reference="3"/>
+      <transactions>
+        <portfolio-transaction id="21">
+          <uuid>sign-txn-buy-001</uuid>
+          <date>2024-02-01T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <security reference="2"/>
+          <shares>250000000</shares>
+          <units/>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>BUY</type>
+        </portfolio-transaction>
+        <portfolio-transaction id="22">
+          <uuid>sign-txn-sell-001</uuid>
+          <date>2024-02-02T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <security reference="2"/>
+          <shares>250000000</shares>
+          <units/>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>SELL</type>
+        </portfolio-transaction>
+        <portfolio-transaction id="23">
+          <uuid>sign-txn-transfer-in-001</uuid>
+          <date>2024-02-03T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <security reference="2"/>
+          <shares>250000000</shares>
+          <units/>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>TRANSFER_IN</type>
+        </portfolio-transaction>
+        <portfolio-transaction id="24">
+          <uuid>sign-txn-transfer-out-001</uuid>
+          <date>2024-02-04T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <security reference="2"/>
+          <shares>250000000</shares>
+          <units/>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>TRANSFER_OUT</type>
+        </portfolio-transaction>
+        <portfolio-transaction id="25">
+          <uuid>sign-txn-delivery-inbound-001</uuid>
+          <date>2024-02-05T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <security reference="2"/>
+          <shares>250000000</shares>
+          <units/>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>DELIVERY_INBOUND</type>
+        </portfolio-transaction>
+        <portfolio-transaction id="26">
+          <uuid>sign-txn-delivery-outbound-001</uuid>
+          <date>2024-02-06T00:00</date>
+          <currencyCode>EUR</currencyCode>
+          <amount>123456</amount>
+          <security reference="2"/>
+          <shares>250000000</shares>
+          <units/>
+          <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+          <type>DELIVERY_OUTBOUND</type>
+        </portfolio-transaction>
+      </transactions>
+      <attributes>
+        <map/>
+      </attributes>
+      <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
+    </portfolio>
+  </portfolios>
+  <plans/>
+  <taxonomies/>
+  <dashboards/>
+  <properties/>
+  <settings>
+    <bookmarks/>
+    <attributeTypes/>
+    <configurationSets/>
+  </settings>
+</client>

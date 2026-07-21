@@ -150,8 +150,7 @@ def test_share_sell_preserve_allocation(request: TopRequest) -> None:
         'simulate', 'share-sell',
         '--target-net', '1000',
         '--preserve-allocation', 'Anlagekategorien',
-        '--tax-rate', '26.375',
-        '--allowance', '0'
+        '--tax-rate', '26.375'
     ])
 
     assert result.exit_code == 0, f"Command failed with: {result.output}"
@@ -175,8 +174,7 @@ def test_share_sell_preserve_allocation_reports_class_share(request: TopRequest)
         'simulate', 'share-sell',
         '--target-net', '1000',
         '--preserve-allocation', 'Anlagekategorien',
-        '--tax-rate', '26.375',
-        '--allowance', '0'
+        '--tax-rate', '26.375'
     ])
 
     assert result.exit_code == 0, f"Command failed with: {result.output}"
@@ -211,7 +209,6 @@ def test_share_sell_uses_configured_taxonomy_for_preserve_allocation(request: To
         'simulate', 'share-sell',
         '--target-net', '1000',
         '--tax-rate', '26.375',
-        '--allowance', '0',
     ])
 
     assert result.exit_code == 0, f"Command failed with: {result.output}"
@@ -264,7 +261,6 @@ def test_share_sell_reads_min_amount_from_config(request: TopRequest, tmp_path: 
             'simulate', 'share-sell',
             '--target-net', '1000',
             '--tax-rate', '26.375',
-            '--allowance', '0',
         ])
 
     assert result.exit_code == 0, f"Command failed with: {result.output}"
@@ -308,7 +304,6 @@ def test_share_sell_preserve_allocation_summary_keeps_asset_class(request: TopRe
         '--preserve-allocation', 'Anlagekategorien',
         '--summary',
         '--tax-rate', '26.375',
-        '--allowance', '0',
     ])
 
     assert result.exit_code == 0, f"Command failed with: {result.output}"
@@ -332,8 +327,7 @@ def test_share_sell_preserve_allocation_min_amount(request: TopRequest, caplog: 
             '--target-net', '1000',
             '--preserve-allocation', 'Anlagekategorien',
             '--min-amount', '500',
-            '--tax-rate', '26.375',
-            '--allowance', '0'
+            '--tax-rate', '26.375'
         ])
 
     assert result.exit_code == 0, f"Command failed with: {result.output}"
@@ -343,66 +337,12 @@ def test_share_sell_preserve_allocation_min_amount(request: TopRequest, caplog: 
     assert 'were left unsold' in caplog.text  # classes too small for a valid order skipped and reported
 
 
-def test_share_sell_applies_sparerpauschbetrag(request: TopRequest) -> None:
+def test_share_sell_target_net_is_hit(request: TopRequest) -> None:
+    """The min-tax selection sells just enough to land on --target-net (the Sparerpauschbetrag is not applied here)."""
     runner = CliRunner()
     fixtures_dir = request.path.parent.parent / 'fixtures'
 
-    def _tax_and_net(*extra: str) -> tuple[float, float]:
-        result = runner.invoke(app, [
-            '--file', str(fixtures_dir / 'kommer.ids.xml'),
-            '--config', str(fixtures_dir / 'kommer.toml'),
-            '--output', 'json',
-            '--no-cache',
-            'simulate', 'share-sell',
-            '--tax-rate', '27.375',
-            *extra,
-        ])
-        assert result.exit_code == 0, f"Command failed with: {result.output}"
-        rows = json.loads(result.output)
-        return sum(r['totalTax'] for r in rows), sum(r['netProceeds'] for r in rows)
-
-    tax_off, net_off = _tax_and_net('--allowance', '0')
-    tax_on, net_on = _tax_and_net('--allowance', '1000')
-
-    # the whole portfolio's taxable gain exceeds 1000, so the allowance is fully used: tax drops by 1000 * rate
-    assert tax_off - tax_on == pytest.approx(1000 * 27.375 / 100, abs=0.5)
-    assert net_on - net_off == pytest.approx(1000 * 27.375 / 100, abs=0.5)
-
-
-def test_share_sell_target_net_accounts_for_allowance(request: TopRequest) -> None:
-    runner = CliRunner()
-    fixtures_dir = request.path.parent.parent / 'fixtures'
-
-    def _run(*extra: str) -> list[dict[str, Any]]:
-        result = runner.invoke(app, [
-            '--file', str(fixtures_dir / 'kommer.ids.xml'),
-            '--config', str(fixtures_dir / 'kommer.toml'),
-            '--output', 'json',
-            '--no-cache',
-            'simulate', 'share-sell',
-            '--target-net', '10000',
-            '--tax-rate', '27.375',
-            *extra,
-        ])
-        assert result.exit_code == 0, f"Command failed with: {result.output}"
-        rows: list[dict[str, Any]] = json.loads(result.output)
-        return rows
-
-    with_allowance = _run('--allowance', '1000')
-    without = _run('--allowance', '0')
-
-    # target net is hit either way (the allowance just means selling a little less), and it saves tax
-    assert sum(r['netProceeds'] for r in with_allowance) == pytest.approx(10000.0, abs=1.0)
-    assert sum(r['netProceeds'] for r in without) == pytest.approx(10000.0, abs=1.0)
-    assert sum(r['totalTax'] for r in with_allowance) < sum(r['totalTax'] for r in without)
-
-
-def test_share_sell_small_target_net_still_hit_when_allowance_exceeds_gain(request: TopRequest) -> None:
-    """Regression: for a small --target-net whose taxable gain is below the allowance, the net must still land on target."""
-    runner = CliRunner()
-    fixtures_dir = request.path.parent.parent / 'fixtures'
-
-    def _net(target: str, *extra: str) -> float:
+    def _net(target: str) -> float:
         result = runner.invoke(app, [
             '--file', str(fixtures_dir / 'kommer.ids.xml'),
             '--config', str(fixtures_dir / 'kommer.toml'),
@@ -411,14 +351,12 @@ def test_share_sell_small_target_net_still_hit_when_allowance_exceeds_gain(reque
             'simulate', 'share-sell',
             '--target-net', target,
             '--tax-rate', '27.375',
-            *extra,
         ])
         assert result.exit_code == 0, f"Command failed with: {result.output}"
         return float(sum(r['netProceeds'] for r in json.loads(result.output)))
 
-    # default allowance (1000) dwarfs the realized gain at these targets; before the fix these undershot badly
     assert _net('300') == pytest.approx(300.0, abs=1.0)
-    assert _net('1000') == pytest.approx(1000.0, abs=1.0)
+    assert _net('10000') == pytest.approx(10000.0, abs=1.0)
 
 
 def test_share_sell_preserve_allocation_requires_target_net(request: TopRequest) -> None:

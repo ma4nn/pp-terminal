@@ -26,7 +26,9 @@ import pandas as pd
 import pytest
 
 from pp_terminal.utils.config import empty_config
-from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df, _resolve_categories, summarize_sell_plan
+from pp_terminal.commands.simulate_share_sell import (
+    prepare_share_sell_df, _resolve_categories, summarize_sell_plan, _sell_introduction
+)
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.exceptions import InputError
 
@@ -214,6 +216,34 @@ def test_summarize_sell_plan_preserves_total_proceeds() -> None:
 
     assert plan['netProceeds'].sum() == pytest.approx(lots['netProceeds'].sum())
     assert plan['totalTax'].sum() == pytest.approx(lots['totalTax'].sum())
+
+
+def test_introduction_full_liquidation_sells_every_share() -> None:
+    intro = _sell_introduction('', None, None, None, None, None)
+    assert 'every share you hold' in intro
+    assert 'the latest price' in intro
+    assert 'FIFO cost basis' in intro
+
+
+def test_introduction_fixed_shares_uses_fifo_and_scope() -> None:
+    intro = _sell_introduction(' of ETF A', 120.0, 10.0, None, None, None)
+    assert '10 shares[/bold] of ETF A' in intro    # scope and a clean share count
+    assert 'the given price of 120.00' in intro   # explicit --price is surfaced
+    assert 'oldest lots first[/bold] (FIFO)' in intro
+
+
+def test_introduction_target_net_explains_tax_minimization() -> None:
+    intro = _sell_introduction('', None, None, 5000.0, None, None)
+    assert 'net [bold]5000.00' in intro
+    assert 'least-taxed lots first' in intro
+    assert 'allocation steady' not in intro       # no taxonomy -> not the preserving variant
+
+
+def test_introduction_preserve_allocation_explains_allocation_and_floor() -> None:
+    intro = _sell_introduction('', None, None, 5000.0, 'Regions', 50.0)
+    assert 'holding your Regions allocation steady' in intro
+    assert 'every asset class sheds the same fraction' in intro
+    assert 'orders below 50.00 are consolidated' in intro
 
 
 def test_multi_category_warning_only_covers_held_securities(warning_log: pytest.LogCaptureFixture) -> None:

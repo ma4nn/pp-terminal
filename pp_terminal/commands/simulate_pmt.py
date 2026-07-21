@@ -55,6 +55,15 @@ class PmtConfig(ConfigModel):
 
 _RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate']
 
+# reserved key in a per-category returns table that sets the rate for every category not listed explicitly
+DEFAULT_RETURN_KEY = '*'
+
+
+def split_return_scenario(scenario: dict[str, float]) -> tuple[float | None, dict[str, float]]:
+    """Splits a per-category returns table into its default rate (the reserved '*' key, if any) and the explicit per-category overrides."""
+    overrides = {category: rate for category, rate in scenario.items() if category != DEFAULT_RETURN_KEY}
+    return scenario.get(DEFAULT_RETURN_KEY), overrides
+
 
 def amortization_factor(rate: float, years: float) -> float:
     """Annuity-due factor: the capital fraction to withdraw at the start of each year so it hits zero after `years` years at return `rate`."""
@@ -130,7 +139,9 @@ def _active_account_balances(snapshot: PortfolioSnapshot) -> pd.Series:
 
 def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonomy: str, returns_by_category: dict[str, float]) -> Percent:
     """Weighted average of the configured per-category real returns over the taxonomy's current allocation,
-    covering both securities and deposit accounts; unclassified items weigh in at 0%."""
+    covering both securities and deposit accounts; categories without a configured rate fall back to the
+    '*' default (if set), and items unclassified in the taxonomy weigh in at 0%."""
+    default_return, category_overrides = split_return_scenario(returns_by_category)
     snapshot = PortfolioSnapshot(portfolio, date)
     security_values = snapshot.values.groupby('securityId').sum()
     account_values = _active_account_balances(snapshot).groupby('accountId').sum()
@@ -143,7 +154,7 @@ def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonom
         security_values.groupby(_security_categories(portfolio, security_values, taxonomy)).sum(),
         account_values.groupby(_account_categories(portfolio, account_values, taxonomy)).sum(),
     ]).groupby(level=0).sum()
-    category_returns = pd.Series({str(category): returns_by_category.get(str(category)) for category in category_values.index}, dtype='float64')
+    category_returns = pd.Series({str(category): category_overrides.get(str(category), default_return) for category in category_values.index}, dtype='float64')
     missing = sorted(category_returns[category_returns.isna()].index)
     if missing:
         log.warning("No return configured for taxonomy categories, assuming 0%%: %s", ', '.join(missing))

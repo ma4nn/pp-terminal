@@ -88,14 +88,18 @@ Tax parameters (`[tax]`) and per-command assumptions (`[commands.simulate.*]`) l
 
 For `simulate pmt`, each `returns` entry is one scenario. An entry may be a fixed rate, or a per-category
 table that is blended over your current asset allocation into a single rate (holdings not assigned to a
-category in the taxonomy weigh in at 0%). Mixing both lets you compare fixed rates against your allocation:
+category in the taxonomy weigh in at 0%). The reserved `"*"` key sets a default rate for every category you
+do not list explicitly, so you only override the ones that differ. Mixing entries lets you compare fixed
+rates against your allocation:
 ```toml
 taxonomy = "Asset Allocation"  # the Portfolio Performance taxonomy representing your asset allocation
 
 [commands.simulate.pmt]
 # fixed scenarios plus one blended from the allocation; keys are taxonomy category names
-returns = [2, 4, 6, { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }]
+returns = [2, 4, 6, { "*" = 4.0, "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }]
 ```
+Any such per-category returns are shown as a `Expected Return` column (one per scenario) in `view taxonomies`, next to the
+category's assignment counts, so you can cross-check them against your allocation.
 
 `simulate share-sell` reuses the global `taxonomy` as the default for `--preserve-allocation`, and
 `[commands.simulate.share-sell] min-amount` sets a per-order floor below which small holdings are consolidated or left unsold.

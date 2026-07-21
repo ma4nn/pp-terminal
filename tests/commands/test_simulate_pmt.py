@@ -23,7 +23,7 @@ import logging
 import pandas as pd
 import pytest
 
-from pp_terminal.commands.simulate_pmt import amortization_factor, blended_return_from_allocation, prepare_pmt_result, _next_step_hint, _resolve_return_scenarios
+from pp_terminal.commands.simulate_pmt import amortization_factor, blended_return_from_allocation, prepare_pmt_result, split_return_scenario, _next_step_hint, _resolve_return_scenarios
 from pp_terminal.utils.config import empty_config
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import AccountType, TransactionType
@@ -207,6 +207,34 @@ def test_blended_return_uses_class_of_assigned_cash_account(portfolio_with_price
     blended = blended_return_from_allocation(portfolio, _DATE, 'AA', {'Equity': 5.0, 'Cash': 1.0})
 
     assert blended == pytest.approx((9000.0 * 5.0 + 1000.0 * 1.0) / 10000.0)
+
+
+def test_split_return_scenario_separates_default_from_overrides() -> None:
+    assert split_return_scenario({'*': 4.0, 'Equity': 5.0}) == (4.0, {'Equity': 5.0})
+    assert split_return_scenario({'Equity': 5.0}) == (None, {'Equity': 5.0})
+    assert split_return_scenario({'*': 3.0}) == (3.0, {})
+
+
+def test_blended_return_default_rate_fills_unlisted_category(portfolio_with_prices: Portfolio, caplog: pytest.LogCaptureFixture) -> None:
+    portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [
+        ['AA', 'sec-1', 'security', 'Equity', 10000],
+        ['AA', 'dep-1', 'account', 'Cash', 10000],
+    ])
+
+    with caplog.at_level(logging.WARNING):
+        blended = blended_return_from_allocation(portfolio, _DATE, 'AA', {'*': 2.0, 'Equity': 5.0})
+
+    assert blended == pytest.approx((9000.0 * 5.0 + 1000.0 * 2.0) / 10000.0)  # Cash falls back to the '*' default
+    assert 'No return configured' not in caplog.text  # the default covers it, so no warning
+
+
+def test_blended_return_default_only_applies_to_every_category(portfolio_with_prices: Portfolio) -> None:
+    portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [
+        ['AA', 'sec-1', 'security', 'Equity', 10000],
+        ['AA', 'dep-1', 'account', 'Cash', 10000],
+    ])
+
+    assert blended_return_from_allocation(portfolio, _DATE, 'AA', {'*': 3.0}) == pytest.approx(3.0)
 
 
 def test_blended_return_unclassified_security_contributes_zero(portfolio_with_prices: Portfolio) -> None:

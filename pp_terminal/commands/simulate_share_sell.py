@@ -243,6 +243,53 @@ def _security_names(portfolio: Portfolio, security_ids: list[str]) -> str:
     return ', '.join(sorted(get_security_by_id(portfolio, sid).name for sid in security_ids))
 
 
+def _sell_scope(portfolio: Portfolio, security_id: str | None, account_id: str | None) -> str:
+    scope = ''
+    if security_id:
+        scope += f' of {get_security_by_id(portfolio, security_id).name}'
+    if account_id:
+        scope += f' in {portfolio.securities_accounts["name"].get(account_id, account_id)}'
+    return scope
+
+
+def _sell_introduction(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        scope: str,
+        price: Money | None,
+        shares: float | None,
+        target_net: Money | None,
+        taxonomy: str | None,
+        min_amount: Money | None,
+) -> str:
+    """Explain which shares get sold and why, adapting to the active selection strategy."""
+    price_clause = f'the given price of {price:.2f}' if price is not None else 'the latest price'
+    if target_net is not None and taxonomy is not None:
+        floor_clause = (f'; orders below {min_amount:.2f} are consolidated onto larger holdings or left unsold'
+                        if min_amount is not None else '')
+        selection = (
+            f'Sells just enough{scope} to net [bold]{target_net:.2f}[/bold] while [bold]holding your '
+            f'{taxonomy} allocation steady[/bold]: every asset class sheds the same fraction of its value, '
+            f'drawing the least-taxed securities within each class first (FIFO within each){floor_clause}.'
+        )
+    elif target_net is not None:
+        selection = (
+            f'Sells just enough{scope} to net [bold]{target_net:.2f}[/bold], taking the '
+            '[bold]least-taxed lots first[/bold] (lowest tax per euro of net proceeds) to keep the tax bill minimal.'
+        )
+    elif shares is not None:
+        selection = (
+            f'Sells [bold]{shares:g} shares[/bold]{scope} at {price_clause}, drawing the '
+            '[bold]oldest lots first[/bold] (FIFO) — the order gains are realized in.'
+        )
+    else:
+        selection = f'Sells [bold]every share you hold[/bold]{scope} at {price_clause}, realizing all FIFO lots in full.'
+
+    return (
+        f'{selection} Each lot is taxed on its gain over the [bold]FIFO cost basis[/bold] '
+        '(Abgeltungssteuer + Soli), crediting any Vorabpauschale already paid; [bold]netProceeds[/bold] '
+        'is what reaches your account after fees and tax.'
+    )
+
+
 @app.command(name="share-sell")
 def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         ctx: typer.Context,
@@ -291,6 +338,10 @@ def simulate_share_sell(  # pylint: disable=too-many-arguments,too-many-position
     if result.empty:
         console.print(output.empty_result())
         return
+
+    console.print(output.introduction(_sell_introduction(
+        _sell_scope(portfolio, security_id, account_id), price, shares, target_net, taxonomy, min_amount
+    )))
 
     if summary:
         result = summarize_sell_plan(result)

@@ -77,8 +77,9 @@ CONFIG_TEMPLATE = """\
 # Expected annual real returns in percent; each list entry is one scenario to compare.
 # An entry may also be a per-category table (keys are taxonomy category names, see the
 # "view taxonomies" command): it is blended over your current allocation into a single
-# rate and requires the "taxonomy" setting above, e.g.:
-#returns = [2, 4, 6, { "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }]
+# rate and requires the "taxonomy" setting above. The reserved "*" key sets a default
+# rate for every category not listed explicitly, e.g.:
+#returns = [2, 4, 6, { "*" = 4.0, "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }]
 # End date of the withdrawal horizon.
 #end-date = 2055-12-31
 

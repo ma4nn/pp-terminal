@@ -247,7 +247,7 @@ def _sell_introduction(  # pylint: disable=too-many-arguments,too-many-positiona
     return (
         f'{selection} Each lot is taxed on its gain over the [bold]FIFO cost basis[/bold] '
         '(Abgeltungssteuer + Soli), crediting any Vorabpauschale already paid; the Sparerpauschbetrag is '
-        '[bold]not[/bold] applied, so gains are shown fully taxed. [bold]netProceeds[/bold] is what reaches '
+        '[bold]not[/bold] applied, so gains are shown fully taxed. [bold]Net Proceeds[/bold] is what reaches '
         'your account after fees and tax.'
     )
 

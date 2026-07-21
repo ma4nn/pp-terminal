@@ -161,19 +161,28 @@ def test_prepare_pmt_result_end_date_must_be_in_the_future(cash_only_portfolio: 
         prepare_pmt_result(cash_only_portfolio, empty_config(), _DATE, _TAX_RATE, [5.0], datetime(2024, 1, 1))
 
 
-def test_next_step_hint_targets_full_net_and_mentions_cash_reserve() -> None:
-    hint = _next_step_hint(1000.0, 200.0)
-    assert '--target-net 1000.00' in hint  # cash is a reserve (e.g. two-bucket strategy), not deducted
+def test_next_step_hint_splits_net_proportionally_between_cash_and_securities() -> None:
+    hint = _next_step_hint(1000.0, 200.0, 5.0)  # 5% withdrawal rate on 200 cash = 10 drawn from cash
+    assert 'spend 10.00' in hint
     assert 'cash balance of 200.00' in hint
+    assert '--target-net 990.00' in hint
+    assert 'buffer' in hint
 
 
-def test_next_step_hint_without_cash_omits_cash_mention() -> None:
-    assert 'cash balance' not in _next_step_hint(1000.0, 0.0)
-    assert 'cash balance' not in _next_step_hint(1000.0, -500.0)
+def test_next_step_hint_without_cash_targets_full_net() -> None:
+    for hint in (_next_step_hint(1000.0, 0.0, 5.0), _next_step_hint(1000.0, -500.0, 5.0)):
+        assert '--target-net 1000.00' in hint
+        assert 'cash balance' not in hint
+
+
+def test_next_step_hint_cash_heavy_funds_entirely_from_cash() -> None:
+    hint = _next_step_hint(1000.0, 100_000.0, 5.0)  # proportional cash draw exceeds the net
+    assert 'Fund the full 1000.00' in hint
+    assert 'share-sell' not in hint
 
 
 def test_next_step_hint_multiple_rates_uses_placeholder() -> None:
-    hint = _next_step_hint(None, 200.0)
+    hint = _next_step_hint(None, 200.0, None)
     assert 'Pick a row' in hint
     assert '--target-net <netPerYear>' in hint
 

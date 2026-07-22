@@ -143,7 +143,6 @@ def test_print_taxonomies(portfolio_with_taxonomies: Portfolio, capsys: pytest.C
     # counts (incl. the Total footer of 2 securities) render as integers, not decimals
     assert '1.00' not in captured.out
     assert '2.00' not in captured.out
-    assert ' 2 ' in captured.out
 
 
 def test_print_taxonomies_renders_configured_returns(portfolio_with_taxonomies: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:

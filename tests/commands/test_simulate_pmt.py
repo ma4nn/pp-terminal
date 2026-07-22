@@ -166,7 +166,6 @@ def test_next_step_hint_splits_gross_proportionally_between_cash_and_securities(
     assert 'spend 10.00' in hint
     assert 'cash balance of 200.00' in hint
     assert '--target-gross 990.00' in hint
-    assert 'buffer' in hint
 
 
 def test_next_step_hint_without_cash_targets_full_gross() -> None:

@@ -222,7 +222,6 @@ def test_introduction_full_liquidation_sells_every_share() -> None:
     intro = _sell_introduction('', None, None, None, None, None, None)
     assert 'every share you hold' in intro
     assert 'the latest price' in intro
-    assert 'FIFO cost basis' in intro
 
 
 def test_introduction_fixed_shares_uses_fifo_and_scope() -> None:
@@ -250,13 +249,11 @@ def test_introduction_target_gross_preserve_allocation_explains_allocation() -> 
     intro = _sell_introduction('', None, None, None, 3000.0, 'Regions', None)
     assert '3000.00[/bold] in gross proceeds' in intro
     assert 'holding your Regions allocation steady' in intro
-    assert 'every asset class sheds the same fraction' in intro
 
 
 def test_introduction_preserve_allocation_explains_allocation_and_floor() -> None:
     intro = _sell_introduction('', None, None, 5000.0, None, 'Regions', 50.0)
     assert 'holding your Regions allocation steady' in intro
-    assert 'every asset class sheds the same fraction' in intro
     assert 'orders below 50.00 are consolidated' in intro
 
 

@@ -27,7 +27,7 @@ import pytest
 
 from pp_terminal.utils.config import empty_config
 from pp_terminal.commands.simulate_share_sell import (
-    prepare_share_sell_df, _resolve_categories, summarize_sell_plan, _sell_introduction
+    prepare_share_sell_df, _resolve_categories, summarize_sell_plan, _sell_introduction, _validate_options
 )
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.exceptions import InputError
@@ -219,31 +219,79 @@ def test_summarize_sell_plan_preserves_total_proceeds() -> None:
 
 
 def test_introduction_full_liquidation_sells_every_share() -> None:
-    intro = _sell_introduction('', None, None, None, None, None)
+    intro = _sell_introduction('', None, None, None, None, None, None)
     assert 'every share you hold' in intro
     assert 'the latest price' in intro
     assert 'FIFO cost basis' in intro
 
 
 def test_introduction_fixed_shares_uses_fifo_and_scope() -> None:
-    intro = _sell_introduction(' of ETF A', 120.0, 10.0, None, None, None)
+    intro = _sell_introduction(' of ETF A', 120.0, 10.0, None, None, None, None)
     assert '10 shares[/bold] of ETF A' in intro    # scope and a clean share count
     assert 'the given price of 120.00' in intro   # explicit --price is surfaced
     assert 'oldest lots first[/bold] (FIFO)' in intro
 
 
 def test_introduction_target_net_explains_tax_minimization() -> None:
-    intro = _sell_introduction('', None, None, 5000.0, None, None)
+    intro = _sell_introduction('', None, None, 5000.0, None, None, None)
     assert 'net [bold]5000.00' in intro
     assert 'least-taxed lots first' in intro
     assert 'allocation steady' not in intro       # no taxonomy -> not the preserving variant
 
 
+def test_introduction_target_gross_explains_gross_and_tax_minimization() -> None:
+    intro = _sell_introduction('', None, None, None, 3000.0, None, None)
+    assert '3000.00[/bold] in gross proceeds' in intro
+    assert 'least-taxed lots first' in intro
+    assert 'allocation steady' not in intro
+
+
+def test_introduction_target_gross_preserve_allocation_explains_allocation() -> None:
+    intro = _sell_introduction('', None, None, None, 3000.0, 'Regions', None)
+    assert '3000.00[/bold] in gross proceeds' in intro
+    assert 'holding your Regions allocation steady' in intro
+    assert 'every asset class sheds the same fraction' in intro
+
+
 def test_introduction_preserve_allocation_explains_allocation_and_floor() -> None:
-    intro = _sell_introduction('', None, None, 5000.0, 'Regions', 50.0)
+    intro = _sell_introduction('', None, None, 5000.0, None, 'Regions', 50.0)
     assert 'holding your Regions allocation steady' in intro
     assert 'every asset class sheds the same fraction' in intro
     assert 'orders below 50.00 are consolidated' in intro
+
+
+def test_target_gross_and_net_are_mutually_exclusive() -> None:
+    """The shared entry point (used by CLI and MCP) rejects both amount targets at once."""
+    with pytest.raises(InputError, match="mutually exclusive"):
+        prepare_share_sell_df(Portfolio(), empty_config(), datetime(2025, 1, 1), 26.375,
+                              target_net=1000.0, target_gross=1000.0)
+
+
+@pytest.mark.parametrize('kwargs', [
+    {'shares': 10.0, 'target_gross': 1000.0},
+    {'target_net': 1000.0, 'target_gross': 1000.0},
+])
+def test_validate_options_rejects_conflicting_targets(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(InputError, match="mutually exclusive"):
+        _validate_options('sec-1', kwargs.get('shares'), None, kwargs.get('target_net'),
+                          kwargs.get('target_gross'), None, None)
+
+
+def test_prepare_share_sell_df_target_gross_reaches_requested_proceeds(portfolio_with_purchases: Portfolio) -> None:
+    """End-to-end: target_gross sells just enough lots to realize the requested gross proceeds."""
+    prices = pd.DataFrame(
+        [[datetime(2024, 12, 31), 'sec-1', 200.0]], columns=['date', 'securityId', 'price']
+    ).set_index(['date', 'securityId'])
+    portfolio = Portfolio(
+        accounts=portfolio_with_purchases.securities_accounts,
+        transactions=portfolio_with_purchases.securities_account_transactions,
+        securities=portfolio_with_purchases.securities,
+        prices=prices,
+    )
+
+    result = prepare_share_sell_df(portfolio, empty_config(), datetime(2025, 1, 1), 26.375, target_gross=4000.0)
+
+    assert result['grossProceeds'].sum() == pytest.approx(4000.0, abs=0.5)
 
 
 def test_multi_category_warning_only_covers_held_securities(warning_log: pytest.LogCaptureFixture) -> None:

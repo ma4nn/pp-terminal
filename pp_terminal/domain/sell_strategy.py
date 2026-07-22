@@ -69,54 +69,57 @@ def _build_fifo_queues(df: pd.DataFrame) -> dict[tuple[str, str], list[int]]:
     return groups
 
 
-def _seed_heap(df: pd.DataFrame, groups: dict[tuple[str, str], list[int]]) -> list[tuple[float, int, int]]:
+def _consume_lots_by_measure(  # pylint: disable=too-many-locals
+        df: pd.DataFrame, value_col: str, per_share_col: str, target: float, skip_worthless: bool = False
+) -> pd.DataFrame:
+    """Fill `target`, measured in `value_col` (grossProceeds or netProceeds), drawing the most tax-efficient
+    lots first and FIFO within each (account, security). With `skip_worthless`, lots whose `per_share_col`
+    is non-positive are never sold (they cannot bring a net target closer)."""
+    queues = _build_fifo_queues(df)
     heap: list[tuple[float, int, int]] = []
-    for tie, queue in enumerate(groups.values()):
-        row = df.loc[queue[0]]
-        if row['netProceedsPerShare'] > 0:
-            heapq.heappush(heap, (_tax_priority(row), tie, queue[0]))
-    return heap
-
-
-def _consume_group_lots(group: pd.DataFrame, target_gross: float) -> pd.DataFrame:  # pylint: disable=too-many-locals
-    """Fill a group's gross quota drawing the most tax-efficient lots first (lot-level, no order floor)."""
-    queues = _build_fifo_queues(group)
-    heap: list[tuple[float, int, int]] = []
-    for tie, queue in enumerate(queues.values()):
-        head = group.loc[queue[0]]
-        heapq.heappush(heap, (_tax_priority(head), tie, queue[0]))
+    tie = 0
+    for queue in queues.values():
+        head = df.loc[queue[0]]
+        if not skip_worthless or head[per_share_col] > 0:
+            heapq.heappush(heap, (_tax_priority(head), tie, queue[0]))
+            tie += 1
 
     taken: dict[int, float] = {}
-    remaining = target_gross
-    tie = len(queues)
+    remaining = target
     while remaining > 0.005 and heap:
         _priority, _tie, row_idx = heapq.heappop(heap)
-        row = group.loc[row_idx]
+        row = df.loc[row_idx]
 
-        if row['grossProceeds'] <= remaining + 0.005:
+        if row[value_col] <= remaining + 0.005:
             taken[row_idx] = row['shares']
-            remaining -= row['grossProceeds']
+            remaining -= row[value_col]
         else:
-            taken[row_idx] = remaining / row['salePrice']
+            taken[row_idx] = min(remaining / row[per_share_col], row['shares'])
             remaining = 0.0
 
         queue = queues[(row['accountId'], row['securityId'])]
         pos = queue.index(row_idx)
         if pos + 1 < len(queue):
-            next_row = group.loc[queue[pos + 1]]
-            heapq.heappush(heap, (_tax_priority(next_row), tie, queue[pos + 1]))
-            tie += 1
+            next_row = df.loc[queue[pos + 1]]
+            if not skip_worthless or next_row[per_share_col] > 0:
+                heapq.heappush(heap, (_tax_priority(next_row), tie, queue[pos + 1]))
+                tie += 1
 
-    result = group.loc[list(taken.keys())].copy()
+    result = df.loc[list(taken.keys())].copy()
     result['shares'] = list(taken.values())
     return result
+
+
+def _consume_group_lots(group: pd.DataFrame, target_gross: float) -> pd.DataFrame:
+    """Fill a group's gross quota drawing the most tax-efficient lots first (lot-level, no order floor)."""
+    return _consume_lots_by_measure(group, 'grossProceeds', 'salePrice', target_gross)
 
 
 class MinTaxStrategy(SellStrategy):  # pylint: disable=too-few-public-methods
     def __init__(self, target_net: Money):
         self.target_net = target_net
 
-    def select_lots(self, lots: DataFrame[TaxLotSellSchema]) -> DataFrame[TaxLotSellSchema]:  # pylint: disable=too-many-locals
+    def select_lots(self, lots: DataFrame[TaxLotSellSchema]) -> DataFrame[TaxLotSellSchema]:
         if lots.empty:
             raise InputError(f"No lots available. Target net: {self.target_net:.2f}")
 
@@ -128,50 +131,37 @@ class MinTaxStrategy(SellStrategy):  # pylint: disable=too-few-public-methods
                 f"Target net {self.target_net:.2f} exceeds maximum achievable {max_achievable:.2f}"
             )
 
-        groups = _build_fifo_queues(df)
-        heap = _seed_heap(df, groups)
-        selected = self._consume_lots(df, groups, heap)
-
-        result = df.loc[list(selected.keys())].copy()
-        result['shares'] = list(selected.values())
+        selected = _consume_lots_by_measure(df, 'netProceeds', 'netProceedsPerShare', self.target_net, skip_worthless=True)
         return TaxLotSellSchema.validate(
-            result.set_index(['date', 'accountId', 'securityId'])
+            selected.set_index(['date', 'accountId', 'securityId'])
         )
 
-    def _consume_lots(
-            self,
-            df: pd.DataFrame,
-            groups: dict[tuple[str, str], list[int]],
-            heap: list[tuple[float, int, int]]
-    ) -> dict[int, float]:
-        remaining = self.target_net
-        selected: dict[int, float] = {}
-        tie = len(groups)
 
-        while remaining > 0.005 and heap:
-            _priority, _tie, row_idx = heapq.heappop(heap)
-            row = df.loc[row_idx]
+class TargetGrossStrategy(SellStrategy):  # pylint: disable=too-few-public-methods
+    """Reach a target gross proceeds amount, drawing the most tax-efficient lots first (FIFO within each holding)."""
 
-            if row['netProceeds'] <= remaining + 0.005:
-                selected[row_idx] = row['shares']
-                remaining -= row['netProceeds']
-            else:
-                selected[row_idx] = min(remaining / row['netProceedsPerShare'], row['shares'])
-                remaining = 0.0
+    def __init__(self, target_gross: Money):
+        self.target_gross = target_gross
 
-            queue = groups[(row['accountId'], row['securityId'])]
-            pos = queue.index(row_idx)
-            if pos + 1 < len(queue):
-                next_row = df.loc[queue[pos + 1]]
-                if next_row['netProceedsPerShare'] > 0:
-                    heapq.heappush(heap, (_tax_priority(next_row), tie, queue[pos + 1]))
-                    tie += 1
+    def select_lots(self, lots: DataFrame[TaxLotSellSchema]) -> DataFrame[TaxLotSellSchema]:
+        if lots.empty:
+            raise InputError(f"No lots available. Target gross: {self.target_gross:.2f}")
 
-        return selected
+        df = lots.reset_index()
+        max_achievable = df['grossProceeds'].sum()
+        if self.target_gross > max_achievable + 0.005:
+            raise InputError(
+                f"Target gross {self.target_gross:.2f} exceeds maximum achievable {max_achievable:.2f}"
+            )
+
+        selected = _consume_lots_by_measure(df, 'grossProceeds', 'salePrice', self.target_gross)
+        return TaxLotSellSchema.validate(
+            selected.set_index(['date', 'accountId', 'securityId'])
+        )
 
 
 class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-public-methods
-    """Reach the target net while preserving the current allocation.
+    """Reach the target (net or gross proceeds) while preserving the current allocation.
 
     Every allocation group loses the same fraction of its value, so weights stay
     intact. A group is a taxonomy category when ``category_by_security`` maps the
@@ -180,35 +170,51 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
     (FIFO within each), consolidating redundant holdings of the same asset class
     instead of selling every one pro-rata.
 
+    Pass exactly one of ``target_net`` or ``target_gross``. A gross target liquidates
+    that market value (each class shedding the same fraction of its gross value); a net
+    target hits that spendable amount after tax.
+
     When ``min_amount`` is set it acts as a per-order (per account/security) floor:
     within a group the quota is consolidated onto whole orders that each clear the
     floor, and a holding too small to ever form a valid order is left unsold (its
     class quota is covered by larger siblings, so weights hold). A group is dropped
     altogether when its whole quota is below the floor, or when none of its holdings
     is large enough to fill even one order (so it could never contribute); the
-    remaining groups still absorb the full target net, so those small classes drift
+    remaining groups still absorb the full target, so those small classes drift
     slightly, and their names are exposed via ``excluded_groups`` after ``select_lots``
     so the caller can warn about them.
     """
 
-    def __init__(self, target_net: Money, category_by_security: dict[str, str] | None = None,
-                 min_amount: Money | None = None):
-        self.target_net = target_net
+    def __init__(self, target_net: Money | None = None, category_by_security: dict[str, str] | None = None,
+                 min_amount: Money | None = None, target_gross: Money | None = None):
+        if (target_net is None) == (target_gross is None):
+            raise InputError("provide exactly one of a target net or a target gross amount")
+        self._by_gross = target_gross is not None
+        self._target: Money = cast(Money, target_gross if self._by_gross else target_net)
         self.category_by_security = category_by_security or {}
         self.min_amount = min_amount
         self.excluded_groups: list[str] = []
 
+    @property
+    def _target_label(self) -> str:
+        return 'gross' if self._by_gross else 'net'
+
+    def _achieved(self, selected: pd.DataFrame) -> float:
+        """Amount the selection realizes, in the active target's units (gross proceeds or net proceeds)."""
+        per_share = selected['salePrice'] if self._by_gross else selected['netProceedsPerShare']
+        return float((selected['shares'] * per_share).sum())
+
     def select_lots(self, lots: DataFrame[TaxLotSellSchema]) -> DataFrame[TaxLotSellSchema]:
         if lots.empty:
-            raise InputError(f"No lots available. Target net: {self.target_net:.2f}")
+            raise InputError(f"No lots available. Target {self._target_label}: {self._target:.2f}")
 
         df = lots.reset_index().sort_values(['accountId', 'securityId', 'date'])
         df['_group'] = df['securityId'].map(lambda sid: self.category_by_security.get(sid, sid))
 
-        max_net = (df['shares'] * df['netProceedsPerShare']).sum()
-        if self.target_net > max_net + 0.005:
+        max_achievable = self._achieved(df)
+        if self._target > max_achievable + 0.005:
             raise InputError(
-                f"Target net {self.target_net:.2f} exceeds maximum achievable {max_net:.2f}"
+                f"Target {self._target_label} {self._target:.2f} exceeds maximum achievable {max_achievable:.2f}"
             )
 
         sellable, fraction = self._resolve_included_groups(df)
@@ -234,10 +240,10 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
         included, self.excluded_groups = self._partition_sellable_groups(group_gross.index, largest_order)
         while True:
             current = df[df['_group'].isin(included)]
-            if current.empty or (current['shares'] * current['netProceedsPerShare']).sum() < self.target_net - 0.005:
+            if current.empty or self._achieved(current) < self._target - 0.005:
                 raise InputError(
-                    f"Reaching a net of {self.target_net:.2f} requires selling amounts below the "
-                    f"{self.min_amount:.2f} minimum; lower --target-net or the minimum"
+                    f"Reaching a {self._target_label} of {self._target:.2f} requires selling amounts below the "
+                    f"{self.min_amount:.2f} minimum; lower --target-{self._target_label} or the minimum"
                 )
             fraction = self._solve_fraction(current)
             below = [group for group in included if fraction * group_gross[group] < self.min_amount - 0.005]
@@ -262,8 +268,7 @@ class AllocationPreservingStrategy(SellStrategy):  # pylint: disable=too-few-pub
         for _ in range(60):
             mid = (low + high) / 2
             selected = self._select_at_fraction(df, mid)
-            net = (selected['shares'] * selected['netProceedsPerShare']).sum()
-            if net < self.target_net:
+            if self._achieved(selected) < self._target:
                 low = mid
             else:
                 high = mid

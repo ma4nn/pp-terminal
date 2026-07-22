@@ -58,6 +58,7 @@ Tool selection guide:
 - "What taxonomies exist?" / "Show asset allocation categories" → portfolio://taxonomies resource
 - "What if I sell everything?" / "Total tax on my portfolio?" → simulate_sell_all
 - "I need X EUR after tax" / "Sell to get X net" / "Minimize taxes for X amount" → simulate_sell_target_net
+- "Sell X EUR worth" / "Liquidate X of market value" / "Realize X gross" / "Withdraw grossPerYear from a plan" → simulate_sell_target_gross
 - "What if I sell N shares of X?" → simulate_sell_shares
 - "Show FIFO lots for X" / "Purchase history for X" → query_fifo_lots
 - "Calculate Vorabpauschale" / "VAP for year X" → simulate_vap
@@ -375,6 +376,52 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         result = prepare_share_sell_df(
             portfolio, config, sell_date, effective_tax_rate,
             security_id, account_id, target_net=target_net,
+            taxonomy=taxonomy, min_amount=min_amount, tax_csv_data=tax_csv_data
+        )
+        return _clean_records(result) if not result.empty else []
+
+    @mcp.tool()
+    def simulate_sell_target_gross(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        target_gross: float,
+        security: str | None = None,
+        account_id: str | None = None,
+        date: str | None = None,
+        tax_rate: float | None = None,
+        taxonomy: str | None = None,
+        min_amount: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find the shares to sell to realize a target gross proceeds amount, drawing the least-taxed lots first.
+
+        Use this to answer questions like 'sell 5000 EUR worth of my portfolio', 'liquidate 10000 EUR of market
+        value', or to execute an amortization/annuity withdrawal plan (the grossPerYear from simulate_pmt): it
+        realizes exactly that gross while keeping the tax bill minimal. Gross proceeds are shares * price before
+        tax; net proceeds are what reaches your account after tax (use simulate_sell_target_net to fix the net).
+        Pass a taxonomy to instead preserve the current asset allocation while realizing the target: each asset
+        class of that Portfolio Performance taxonomy sheds the same fraction of its market value (drawing the most
+        tax-efficient securities within each class first). With a taxonomy, pass min_amount to skip asset classes
+        whose gross sale would fall below it (avoids dust trades); the remaining classes still reach the full target.
+        Uses latest known prices. Each row is one FIFO lot showing: securityName, isin, purchase date,
+        shares to sell, currency, purchasePrice, costBasis, fees, salePrice, grossProceeds,
+        capitalGain, deemedIncome (Vorabpauschale), taxableGain, totalTax, netProceeds.
+        With a taxonomy each row also carries assetClass and classShare (the class's share of total gross proceeds).
+
+        Args:
+            target_gross: Target gross proceeds to realize, before tax (required)
+            security: ISIN (e.g. 'IE00B4L5Y983') or securityId UUID to restrict to (defaults to all)
+            account_id: Restrict to a single securities account (defaults to all accounts)
+            date: Sale date as ISO string, e.g. '2025-06-15' (defaults to today)
+            tax_rate: Personal tax rate in percent (defaults to config or 26.375%)
+            taxonomy: Preserve the current asset allocation using this taxonomy's classes (defaults to pure tax minimization)
+            min_amount: Minimum gross sale per asset class; smaller classes are skipped (requires taxonomy)
+        """
+        portfolio = _ensure_fresh_portfolio()
+        sell_date, effective_tax_rate = _sell_defaults(date, tax_rate)
+        tax_csv_data = load_prepaid_tax_data(config.tax.files, portfolio)
+        security_id = _resolve_security(portfolio, security) if security else None
+
+        result = prepare_share_sell_df(
+            portfolio, config, sell_date, effective_tax_rate,
+            security_id, account_id, target_gross=target_gross,
             taxonomy=taxonomy, min_amount=min_amount, tax_csv_data=tax_csv_data
         )
         return _clean_records(result) if not result.empty else []

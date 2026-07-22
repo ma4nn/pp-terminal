@@ -252,28 +252,28 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
     return pd.DataFrame(rows)[_RESULT_COLUMNS]
 
 
-def _next_step_hint(net: Money | None, cash: Money, gross_rate: Percent | None) -> str:
-    if net is None:
-        hint = ('Pick a row and run [cyan]simulate share-sell --target-net <netPerYear> --summary[/cyan] '
-                'to turn that row\'s net amount into a concrete sell plan per security.')
+def _next_step_hint(gross: Money | None, cash: Money, gross_rate: Percent | None) -> str:
+    if gross is None:
+        hint = ('Pick a row and run [cyan]simulate share-sell --target-gross <grossPerYear> --summary[/cyan] '
+                'to turn that row\'s gross withdrawal into a concrete sell plan per security (its real tax and net follow).')
         if cash > 0:
-            hint += ' You may fund part of it from cash, lowering [cyan]--target-net[/cyan] by that amount.'
+            hint += ' You may fund part of it from cash, lowering [cyan]--target-gross[/cyan] by that amount.'
         return hint
 
     if cash <= 0:
-        return (f'Run [cyan]simulate share-sell --target-net {net:.2f} --summary[/cyan] '
-                'to turn this year\'s net amount into a concrete sell plan per security.')
+        return (f'Run [cyan]simulate share-sell --target-gross {gross:.2f} --summary[/cyan] '
+                'to turn this year\'s gross withdrawal into a concrete sell plan per security (its real tax and net follow).')
 
     # proportional (plan-consistent) split: draw this year's withdrawal rate from cash too, the rest from securities
-    cash_draw = min(cash * (gross_rate or Percent(0)) / 100, net)
-    from_securities = net - cash_draw
+    cash_draw = min(cash * (gross_rate or Percent(0)) / 100, gross)
+    from_securities = gross - cash_draw
     if from_securities <= 0:
-        return (f'Fund the full {net:.2f} from your cash balance of {cash:.2f} — '
+        return (f'Fund the full {gross:.2f} from your cash balance of {cash:.2f} — '
                 'no securities need to be sold this year.')
 
     return (
         f'Plan-consistent split: spend {cash_draw:.2f} from your cash balance of {cash:.2f}, then run '
-        f'[cyan]simulate share-sell --target-net {from_securities:.2f} --summary[/cyan] to raise the rest by selling securities. '
+        f'[cyan]simulate share-sell --target-gross {from_securities:.2f} --summary[/cyan] to raise the rest by selling securities. '
         'Drawing more from cash than this is your bad-year buffer — refill it in good years.'
     )
 
@@ -323,9 +323,13 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
     console.print(output.introduction(
         f'Withdrawing the [bold]gross[/bold] amount at the start of each year runs the portfolio down to zero '
         f'by {end_date.strftime("%Y-%m-%d")} ({round(_horizon_years(date, end_date) * 12)} months left) at {rate_clause} '
-        f'The [bold]net[/bold] amount is what is left to spend after German taxes on the drawn gain '
+        f'The [bold]net[/bold] amount is what is left to spend after an [bold]estimated[/bold] German tax on the drawn gain '
         f'(up to {allowance:.2f} Sparerpauschbetrag applied). All amounts are in today\'s purchasing power.\n'
-        '[dim]Restrictions: cash is included at par; future Vorabpauschale and the nominal taxation of real gains are not modeled.[/dim]'
+        '[dim]Restrictions: the tax (and hence net) is approximate — it applies the portfolio\'s average embedded gain '
+        'uniformly, whereas a real sale realizes specific lots (the least-taxed first), so a given year\'s actual tax is '
+        'usually lower. Run [cyan]simulate share-sell[/cyan] for the exact per-security figure, matching this row\'s gross '
+        'with [cyan]--target-gross[/cyan] (or its net with [cyan]--target-net[/cyan]). Cash is included at par; future '
+        'Vorabpauschale and the nominal taxation of real gains are not modeled.[/dim]'
     ))
     console.print(*output.result_table(
         result,
@@ -334,9 +338,9 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
 
     cash = Money(_active_account_balances(PortfolioSnapshot(portfolio, date)).sum())
     single = result.iloc[0] if len(result) == 1 else None
-    net = Money(single['netPerYear']) if single is not None else None
+    gross = Money(single['grossPerYear']) if single is not None else None
     gross_rate = Percent(single['grossRate']) if single is not None else None
-    console.print(output.hint(_next_step_hint(net, cash, gross_rate)))
+    console.print(output.hint(_next_step_hint(gross, cash, gross_rate)))
     console.print(output.hint(
         'Recompute yearly with the actual balance and the remaining horizon — '
         'lower realized returns shrink the next amount instead of causing ruin.'

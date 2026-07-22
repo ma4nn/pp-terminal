@@ -25,7 +25,7 @@ import pytest
 from pandera.typing import DataFrame
 
 from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots, finalize_sell_lots
-from pp_terminal.domain.sell_strategy import FixedSharesStrategy, MinTaxStrategy, AllocationPreservingStrategy
+from pp_terminal.domain.sell_strategy import FixedSharesStrategy, MinTaxStrategy, TargetGrossStrategy, AllocationPreservingStrategy
 from pp_terminal.domain.schemas import AccountType, TransactionType, TaxLotSellSchema
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
@@ -288,6 +288,83 @@ class TestMinTaxStrategy:
             MinTaxStrategy(1000.0).select_lots(TaxLotSellSchema.empty())
 
 
+# --- TargetGrossStrategy ---
+
+class TestTargetGrossStrategy:
+    def test_hits_target_gross(self) -> None:
+        portfolio = _make_portfolio([
+            [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 5000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        ])
+        enriched = _enrich(portfolio, sell_price=100.0)  # max gross 10000
+
+        result = TargetGrossStrategy(4000.0).select_lots(enriched)
+        result = finalize_sell_lots(result, TAX_RATE)
+
+        assert result['grossProceeds'].sum() == pytest.approx(4000.0, abs=0.5)
+
+    def test_picks_lowest_tax_lot_first(self) -> None:
+        """For a fixed gross, the least-taxed security is drawn first to minimize the tax bill."""
+        portfolio = _make_portfolio(
+            transactions_data=[
+                # sec-1: bought at 50, sell at 100 -> high gain -> high tax
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 5000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                # sec-2: bought at 90, sell at 100 -> low gain -> low tax
+                [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 9000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+            securities_data=[['ETF A', 'WKN1', 'EUR'], ['ETF B', 'WKN2', 'EUR']],
+        )
+        enriched = _enrich_multi(portfolio, sell_price=100.0)  # each security holds 10000 gross
+
+        # 5000 gross fits inside sec-2 alone -> the cheaper one is taken first
+        result = TargetGrossStrategy(5000.0).select_lots(enriched)
+        result = finalize_sell_lots(result, TAX_RATE)
+
+        assert result.reset_index()['securityId'].unique().tolist() == ['sec-2']
+
+    def test_respects_fifo_within_group(self) -> None:
+        """Within a security the oldest lot is consumed first, even when a later lot is cheaper to sell."""
+        portfolio = _make_portfolio(
+            transactions_data=[
+                # Lot 1 (older): bought at 90 -> small gain; Lot 2: bought at 50 -> large gain
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 900.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2021, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 500.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+        )
+        enriched = _enrich(portfolio, sell_price=100.0)  # each lot holds 1000 gross
+
+        result = TargetGrossStrategy(1500.0).select_lots(enriched)  # spills from lot 1 into lot 2
+        result = finalize_sell_lots(result, TAX_RATE).reset_index().sort_values('date')
+
+        assert len(result) == 2
+        assert result.iloc[0]['shares'] == pytest.approx(10.0)      # older lot fully consumed first
+        assert result.iloc[1]['shares'] == pytest.approx(5.0)       # then 500 gross of the newer lot
+
+    def test_partial_lot_for_exact_target(self) -> None:
+        portfolio = _make_portfolio([
+            [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 10000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        ])
+        enriched = _enrich(portfolio, sell_price=150.0)  # max gross 15000
+
+        result = TargetGrossStrategy(3000.0).select_lots(enriched)  # 20 shares @ 150
+        result = finalize_sell_lots(result, TAX_RATE)
+
+        assert len(result) == 1
+        assert result.iloc[0]['shares'] == pytest.approx(20.0)
+
+    def test_target_exceeds_max_raises(self) -> None:
+        portfolio = _make_portfolio([
+            [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 10000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        ])
+        enriched = _enrich(portfolio, sell_price=150.0)
+
+        with pytest.raises(InputError, match="exceeds maximum achievable"):
+            TargetGrossStrategy(999999.0).select_lots(enriched)
+
+    def test_empty_lots_raises(self) -> None:
+        with pytest.raises(InputError, match="No lots available"):
+            TargetGrossStrategy(1000.0).select_lots(TaxLotSellSchema.empty())
+
+
 # --- AllocationPreservingStrategy (security-level, no taxonomy) ---
 
 class TestAllocationPreservingStrategy:
@@ -440,6 +517,69 @@ class TestAllocationPreservingStrategyByCategory:
         shares_by_security = result.reset_index().groupby('securityId')['shares'].sum()
         assert shares_by_security['sec-2'] == pytest.approx(100.0)  # cheaper equity fully consumed first
         assert 0.0 < shares_by_security['sec-1'] < 100.0            # then spills into the pricier one
+
+
+# --- AllocationPreservingStrategy (gross target) ---
+
+class TestAllocationPreservingStrategyGrossTarget:
+    # Equity 20000 (sec-1 high gain + sec-2 low gain), Bonds 10000 (sec-3).
+    CATEGORY_MAP = {'sec-1': 'Equity', 'sec-2': 'Equity', 'sec-3': 'Bonds'}
+
+    def _enriched(self) -> DataFrame[TaxLotSellSchema]:
+        portfolio = _make_portfolio(
+            transactions_data=[
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 5000.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 9500.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-3', TransactionType.BUY.value, 9800.0, 100.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+            securities_data=[['ETF A', 'WKN1', 'EUR'], ['ETF B', 'WKN2', 'EUR'], ['Bond C', 'WKN3', 'EUR']],
+        )
+        return _enrich_multi(portfolio, sell_price=100.0)  # each security holds 10000 gross
+
+    def test_hits_requested_gross(self) -> None:
+        result = AllocationPreservingStrategy(category_by_security=self.CATEGORY_MAP, target_gross=6000.0).select_lots(self._enriched())
+        result = finalize_sell_lots(result, TAX_RATE)
+
+        assert result['grossProceeds'].sum() == pytest.approx(6000.0, abs=1.0)
+
+    def test_preserves_class_weights(self) -> None:
+        """Each class sheds the same fraction of its gross value, regardless of which security supplies it."""
+        result = AllocationPreservingStrategy(category_by_security=self.CATEGORY_MAP, target_gross=6000.0).select_lots(self._enriched())
+        result = finalize_sell_lots(result, TAX_RATE)
+
+        sold = result.reset_index()
+        sold['cls'] = sold['securityId'].map(self.CATEGORY_MAP)
+        gross_by_class = sold.groupby('cls')['grossProceeds'].sum()
+        # Equity class is worth 20000, Bonds 10000
+        assert gross_by_class['Equity'] / 20000 == pytest.approx(gross_by_class['Bonds'] / 10000, abs=1e-3)
+
+    def test_min_amount_excludes_small_class(self) -> None:
+        # Equity 20000 (sec-1), Cash 500 (sec-2): a 200 floor drops the Cash quota once it falls below it.
+        portfolio = _make_portfolio(
+            transactions_data=[
+                [datetime(2020, 1, 1), 'acc-1', 'sec-1', TransactionType.BUY.value, 10000.0, 200.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+                [datetime(2020, 1, 1), 'acc-1', 'sec-2', TransactionType.BUY.value, 490.0, 5.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+            ],
+            securities_data=[['ETF A', 'WKN1', 'EUR'], ['Cash D', 'WKN2', 'EUR']],
+        )
+        enriched = _enrich_multi(portfolio, sell_price=100.0)
+
+        strategy = AllocationPreservingStrategy(category_by_security={'sec-1': 'Equity', 'sec-2': 'Cash'}, min_amount=200.0, target_gross=4000.0)
+        result = finalize_sell_lots(strategy.select_lots(enriched), TAX_RATE)
+
+        assert 'sec-2' not in set(result.reset_index()['securityId'])  # tiny Cash class dropped under the floor
+        assert strategy.excluded_groups == ['Cash']
+        assert result['grossProceeds'].sum() == pytest.approx(4000.0, abs=1.0)  # target still met by Equity
+
+    def test_target_exceeds_max_raises(self) -> None:
+        with pytest.raises(InputError, match="exceeds maximum achievable"):
+            AllocationPreservingStrategy(category_by_security=self.CATEGORY_MAP, target_gross=999999.0).select_lots(self._enriched())
+
+    def test_requires_exactly_one_target(self) -> None:
+        with pytest.raises(InputError, match="exactly one"):
+            AllocationPreservingStrategy()
+        with pytest.raises(InputError, match="exactly one"):
+            AllocationPreservingStrategy(target_net=1000.0, target_gross=1000.0)
 
 
 # --- AllocationPreservingStrategy (--min-amount) ---

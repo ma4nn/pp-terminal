@@ -35,7 +35,7 @@ from pp_terminal.commands.view_taxonomies import prepare_taxonomies_df
 from pp_terminal.data.filters import clean_for_display
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.portfolio import Portfolio
-from pp_terminal.domain.schemas import AccountType
+from pp_terminal.domain.schemas import AccountType, TransactionType
 from pp_terminal.data.pp_portfolio_builder import CachedPpPortfolioBuilder
 from pp_terminal.exceptions import InputError
 from pp_terminal.output.strategy import JsonOutputStrategy
@@ -55,6 +55,7 @@ Workflow:
 Tool selection guide:
 - "Show my holdings" / "What securities do I have?" → query_securities
 - "Show my accounts" / "What is my cash balance?" → query_accounts
+- "How much have I deposited?" / "What are my net contributions?" → query_cash_flows
 - "What taxonomies exist?" / "Show asset allocation categories" → portfolio://taxonomies resource
 - "What if I sell everything?" / "Total tax on my portfolio?" → simulate_sell_all
 - "I need X EUR after tax" / "Sell to get X net" / "Minimize taxes for X amount" → simulate_sell_target_net
@@ -107,6 +108,44 @@ def _resolve_security(portfolio: Portfolio, security: str) -> str:
         raise InputError(f"WKN '{security}' matches multiple securities: {list(wkn_matches)}")
 
     raise InputError(f"Security '{security}' not found by ID or ISIN OR WKN")
+
+
+def _calculate_cash_flows(
+    transactions: pd.DataFrame,
+    account_id: str | None = None,
+    include_transfers: bool = False,
+) -> pd.DataFrame:
+    """Aggregate external cash flows by currency."""
+    if account_id is not None:
+        transactions = transactions[
+            transactions.index.get_level_values('accountId') == account_id
+        ]
+
+    deposit_types = [TransactionType.DEPOSIT.value]
+    withdrawal_types = [TransactionType.REMOVAL.value]
+    if include_transfers:
+        deposit_types.append(TransactionType.TRANSFER_IN.value)
+        withdrawal_types.append(TransactionType.TRANSFER_OUT.value)
+
+    deposits = transactions[transactions['type'].isin(deposit_types)]
+    withdrawals = transactions[transactions['type'].isin(withdrawal_types)]
+    deposits_by_currency = deposits.groupby('currency')['amount'].sum()
+    withdrawals_by_currency = -withdrawals.groupby('currency')['amount'].sum()
+    currencies = deposits_by_currency.index.union(withdrawals_by_currency.index)
+
+    result = pd.DataFrame(index=currencies)
+    result['totalDeposits'] = deposits_by_currency
+    result['totalWithdrawals'] = withdrawals_by_currency
+    result = result.fillna(0.0)
+    result['netContributions'] = result['totalDeposits'] - result['totalWithdrawals']
+    flow_types = deposit_types + withdrawal_types
+    result['transactionCount'] = (
+        transactions[transactions['type'].isin(flow_types)]
+        .groupby('currency').size()
+        .reindex(currencies, fill_value=0)
+        .astype(int)
+    )
+    return result.reset_index(names='currency')
 
 
 def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: disable=too-many-locals,too-many-statements
@@ -193,6 +232,30 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         parsed_type = AccountType[account_type] if account_type else None
         df = prepare_accounts_df(portfolio, config, output, by_date, parsed_type)
         return _clean_records(df.reset_index())
+
+    @mcp.tool()
+    def query_cash_flows(
+        date: str | None = None,
+        account_id: str | None = None,
+        include_transfers: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Calculate cumulative deposits, withdrawals, and net contributions.
+
+        Results are grouped by currency because amounts in different currencies
+        must not be added together. Deposits and withdrawals include all
+        transactions from the beginning of the file through the requested date.
+        Internal transfers are excluded by default.
+
+        Args:
+            date: Include transactions through this ISO date (defaults to today).
+            account_id: Restrict the result to one deposit account.
+            include_transfers: Include TRANSFER_IN and TRANSFER_OUT transactions.
+        """
+        portfolio = _ensure_fresh_portfolio()
+        by_date = datetime.fromisoformat(date) if date else datetime.now()
+        transactions = PortfolioSnapshot(portfolio, by_date).deposit_account_transactions
+        result = _calculate_cash_flows(transactions, account_id, include_transfers)
+        return _clean_records(result)
 
     @mcp.tool()
     def simulate_vap(

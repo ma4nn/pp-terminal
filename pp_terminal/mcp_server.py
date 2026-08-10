@@ -110,6 +110,20 @@ def _resolve_security(portfolio: Portfolio, security: str) -> str:
     raise InputError(f"Security '{security}' not found by ID or ISIN OR WKN")
 
 
+def _resolve_deposit_account(portfolio: Portfolio, account: str) -> str:
+    accounts = portfolio.deposit_accounts
+    if account in accounts.index:
+        return account
+
+    name_matches = accounts.index[accounts['name'] == account]
+    if len(name_matches) == 1:
+        return str(name_matches[0])
+    if len(name_matches) > 1:
+        raise InputError(f"Name '{account}' matches multiple deposit accounts: {list(name_matches)}")
+
+    raise InputError(f"Deposit account '{account}' not found by ID or name. Available: {list(accounts['name'])}")
+
+
 def _calculate_cash_flows(
     transactions: pd.DataFrame,
     account_id: str | None = None,
@@ -241,20 +255,36 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
     ) -> list[dict[str, Any]]:
         """Calculate cumulative deposits, withdrawals, and net contributions.
 
+        Each row is one currency showing: currency, totalDeposits, totalWithdrawals,
+        netContributions (totalDeposits - totalWithdrawals), and transactionCount.
         Results are grouped by currency because amounts in different currencies
         must not be added together. Deposits and withdrawals include all
         transactions from the beginning of the file through the requested date.
         Internal transfers are excluded by default.
 
+        totalWithdrawals is reported as a positive number, so netContributions is
+        negative once withdrawals exceed deposits. transactionCount counts deposits
+        and withdrawals together, not deposits alone.
+
+        Only cash movements on deposit accounts are counted. Securities delivered
+        into or out of the portfolio in kind (DELIVERY_INBOUND / DELIVERY_OUTBOUND,
+        e.g. a transfer from another broker) never touch a deposit account and are
+        therefore not part of netContributions.
+
         Args:
             date: Include transactions through this ISO date (defaults to today).
-            account_id: Restrict the result to one deposit account.
-            include_transfers: Include TRANSFER_IN and TRANSFER_OUT transactions.
+            account_id: Restrict the result to one deposit account, given as its
+                accountId or its name. Raises an error if it matches no account.
+            include_transfers: Include TRANSFER_IN and TRANSFER_OUT transactions,
+                i.e. cash moved between two of your own deposit accounts. These
+                net to zero across the whole portfolio, so enable this only
+                together with account_id.
         """
         portfolio = _ensure_fresh_portfolio()
         by_date = datetime.fromisoformat(date) if date else datetime.now()
+        resolved_account_id = _resolve_deposit_account(portfolio, account_id) if account_id else None
         transactions = PortfolioSnapshot(portfolio, by_date).deposit_account_transactions
-        result = _calculate_cash_flows(transactions, account_id, include_transfers)
+        result = _calculate_cash_flows(transactions, resolved_account_id, include_transfers)
         return _clean_records(result)
 
     @mcp.tool()

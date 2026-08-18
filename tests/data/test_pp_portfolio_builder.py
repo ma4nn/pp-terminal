@@ -54,10 +54,35 @@ def test_import_non_existent_file() -> None:
         CachedPpPortfolioBuilder().construct(Path('non-existing.xml'))
 
 
-@pytest.mark.parametrize("xml_file", ['kommer.xml', 'invalid.xml', 'other.xml'])
+@pytest.mark.parametrize("xml_file", ['invalid.xml', 'other.xml'])
 def test_import_invalid_xml(request: TopRequest, xml_file: str) -> None:
     with pytest.raises(InputError):
         PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / xml_file)
+
+
+def test_import_xml_without_ids(request: TopRequest) -> None:
+    """Portfolio Performance's default xml flavor uses relative path references instead of id attributes."""
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.xml')
+
+    assert not portfolio.securities.empty
+
+
+def test_import_xml_without_ids_matches_id_flavor(request: TopRequest) -> None:
+    fixtures = request.path.parent.parent / 'fixtures'
+    without_ids = PpPortfolioBuilder().construct(fixtures / 'kommer.xml')
+    with_ids = PpPortfolioBuilder().construct(fixtures / 'kommer.ids.xml')
+
+    assert without_ids.base_currency == with_ids.base_currency
+    assert without_ids.taxonomies == with_ids.taxonomies
+    assert without_ids.all_attributes == with_ids.all_attributes
+
+    # the two fixtures are exports of the same portfolio, but the "with ids" one carries one additional
+    # security attribute value; xml bookkeeping columns differ accordingly and are irrelevant downstream
+    diverging = ['2baac2d0-459b-4b41-a0ef-d7dad0866892', '_xmlid', '_order']
+    for name in ('securities', 'prices', 'taxonomy_assignments', 'securities_accounts', 'deposit_accounts',
+                 'securities_account_transactions', 'deposit_account_transactions'):
+        pd.testing.assert_frame_equal(getattr(without_ids, name).drop(columns=diverging, errors='ignore'),
+                                      getattr(with_ids, name).drop(columns=diverging, errors='ignore'))
 
 
 def test_import_pp_empty_xml(request: TopRequest) -> None:

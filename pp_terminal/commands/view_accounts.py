@@ -56,7 +56,7 @@ def _prepare_df_for_display(
     if unstack_balance:
         cols_before_unstack = set(df.columns)
         df = df.pipe(unstack_column_by_currency, column='balance', base_currency=snapshot.portfolio.base_currency)
-        currency_cols = list(set(df.columns) - cols_before_unstack)
+        currency_cols = [col for col in df.columns if col not in cols_before_unstack]
     else:
         currency_cols = []
 

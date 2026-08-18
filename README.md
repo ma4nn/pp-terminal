@@ -152,7 +152,7 @@ anonymization. Run `pp-terminal init` for the format.
 
 - [pipx](https://pipx.pypa.io/latest/#install-pipx) to install the application (without having to worry about different Python runtimes)
 - Portfolio Performance version >= 0.70.3
-- Portfolio Performance file must be saved as "XML with id attributes"
+- Portfolio Performance file must be available as XML (with or without ID attributes)
 
 ## Installing
 

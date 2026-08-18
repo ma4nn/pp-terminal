@@ -21,6 +21,7 @@ import csv
 import io
 import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -514,6 +515,44 @@ def test_anonymize_warns_and_keeps_output_clean(request: TopRequest, caplog: pyt
     assert 'anonymized' in caplog.text  # emitted as a log warning (stderr), not as part of the result
     assert 'anonymized' not in result.stdout
     assert json.loads(result.stdout)  # the warning must not corrupt machine-readable output
+
+
+@pytest.fixture(name='isolated_logging')
+def fixture_isolated_logging() -> Iterator[None]:
+    """Verbose runs reconfigure the root logger process-wide, which would leak debug output into later tests."""
+    root = logging.getLogger()
+    level, handlers = root.level, root.handlers[:]
+    yield
+    root.setLevel(level)
+    root.handlers[:] = handlers
+
+
+@pytest.mark.parametrize("flag", ['--verbose', '--debug'])
+@pytest.mark.usefixtures('isolated_logging')
+def test_verbose_logging_flags_are_synonyms(request: TopRequest, flag: str) -> None:
+    """Both flags let the underlying error surface instead of the bare abort a normal run produces."""
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'invalid.xml'
+    args = ['--file', str(xml_file), '--no-cache', 'view', 'accounts']
+
+    assert isinstance(runner.invoke(app, args).exception, SystemExit)
+    assert isinstance(runner.invoke(app, [flag, *args]).exception, InputError)
+
+
+def test_view_accounts_currency_column_order_is_stable(request: TopRequest) -> None:
+    """Currency columns are derived from the unstacked balance, so their order must not depend on set iteration."""
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+
+    result = runner.invoke(app, [
+        '--file', str(xml_file),
+        '--output', 'csv',
+        '--no-cache',
+        'view', 'accounts'
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert result.output.splitlines()[0] == 'accountId,name,type,EUR,GBP,USD,messages'
 
 
 def test_view_securities_csv_output(request: TopRequest) -> None:

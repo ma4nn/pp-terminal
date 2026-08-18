@@ -151,6 +151,8 @@ Main app structure (`main.py`):
 
 The XML format used by Portfolio Performance is nothing but internal serialization format of 3rd-party library [XStream](https://x-stream.github.io/). 
 
+Both XStream reference flavors are accepted: files saved as "XML with id attributes" go straight to ppxml2db, while the default "XML" flavor (relative path references) is normalized in memory by `data/xml_id_reference_converter.py` first.
+
 ### Output System
 
 `pp_terminal/output/` implements the strategy pattern: one strategy class per supported format, selected via factory. Add a new format by adding a strategy module and registering it in the factory.

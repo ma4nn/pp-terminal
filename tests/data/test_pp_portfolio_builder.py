@@ -61,7 +61,7 @@ def test_import_invalid_xml(request: TopRequest, xml_file: str) -> None:
 
 
 def test_import_xml_without_ids(request: TopRequest) -> None:
-    """Portfolio Performance's default xml flavor uses relative path references instead of id attributes."""
+    """The default xml flavor uses relative path references instead of id attributes."""
     portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.xml')
 
     assert not portfolio.securities.empty
@@ -76,8 +76,7 @@ def test_import_xml_without_ids_matches_id_flavor(request: TopRequest) -> None:
     assert without_ids.taxonomies == with_ids.taxonomies
     assert without_ids.all_attributes == with_ids.all_attributes
 
-    # the two fixtures are exports of the same portfolio, but the "with ids" one carries one additional
-    # security attribute value; xml bookkeeping columns differ accordingly and are irrelevant downstream
+    # the "with ids" export carries one extra security attribute, shifting the xml bookkeeping columns too
     diverging = ['2baac2d0-459b-4b41-a0ef-d7dad0866892', '_xmlid', '_order']
     for name in ('securities', 'prices', 'taxonomy_assignments', 'securities_accounts', 'deposit_accounts',
                  'securities_account_transactions', 'deposit_account_transactions'):

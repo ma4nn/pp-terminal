@@ -86,6 +86,7 @@ _COMMAND_PATHS: dict[type[ConfigModel], tuple[str, ...]] = {}
 
 # Global storage for the loaded config
 _loaded_config: AppConfig | None = None  # pylint: disable=invalid-name
+_loaded_config_path: str | None = None  # pylint: disable=invalid-name
 
 
 class _MountConflict(Exception):
@@ -203,7 +204,7 @@ def validated_toml_loader(config_path: str) -> dict[str, Any]:
     Validates into the typed AppConfig (stored for get_config()) and returns the
     raw mapping so typer-config can map top-level keys onto CLI option defaults.
     """
-    global _loaded_config  # pylint: disable=global-statement
+    global _loaded_config, _loaded_config_path  # pylint: disable=global-statement
 
     explicit_config = config_path != ''
     if config_path == '':
@@ -226,13 +227,19 @@ def validated_toml_loader(config_path: str) -> dict[str, Any]:
         log.warning("Ignoring invalid config at default location:\n%s", message)
         return {}
 
-    log.debug("Loaded and validated config from file \"%s\"", config_path)
+    # logging is configured later, so the main callback reports this path
+    _loaded_config_path = config_path
 
     # Presence-based anonymization: an existing [anonymize] section maps to the boolean CLI option
     if _loaded_config.anonymize is not None:
         return {**raw, 'anonymize': True}
 
     return raw
+
+
+def get_config_path() -> str | None:
+    """Path of the config file in use, None if there is none."""
+    return _loaded_config_path
 
 
 def get_config() -> AppConfig:

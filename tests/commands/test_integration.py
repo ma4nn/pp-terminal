@@ -519,7 +519,7 @@ def test_anonymize_warns_and_keeps_output_clean(request: TopRequest, caplog: pyt
 
 @pytest.fixture(name='isolated_logging')
 def fixture_isolated_logging() -> Iterator[None]:
-    """Verbose runs reconfigure the root logger process-wide, which would leak debug output into later tests."""
+    """Verbose runs reconfigure the root logger process-wide, which would leak into later tests."""
     root = logging.getLogger()
     level, handlers = root.level, root.handlers[:]
     yield
@@ -527,10 +527,29 @@ def fixture_isolated_logging() -> Iterator[None]:
     root.handlers[:] = handlers
 
 
+@pytest.mark.usefixtures('isolated_logging')
+def test_input_files_are_reported_in_verbose_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: TopRequest
+) -> None:
+    """Neither path was typed by the user here, so both must be traceable from the log."""
+    xml_file = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+    config_dir = tmp_path / 'pp-terminal'
+    config_dir.mkdir()
+    (config_dir / 'config.toml').write_text(f'file = "{xml_file}"\n', encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+
+    result = CliRunner().invoke(app, ['--no-cache', '--debug', 'view', 'accounts'])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    logged = ''.join(result.output.split())  # rich wraps long paths at terminal width
+    assert str(config_dir / 'config.toml') in logged
+    assert str(xml_file) in logged
+
+
 @pytest.mark.parametrize("flag", ['--verbose', '--debug'])
 @pytest.mark.usefixtures('isolated_logging')
 def test_verbose_logging_flags_are_synonyms(request: TopRequest, flag: str) -> None:
-    """Both flags let the underlying error surface instead of the bare abort a normal run produces."""
+    """Both let the underlying error surface instead of the bare abort a normal run produces."""
     runner = CliRunner()
     xml_file = request.path.parent.parent / 'fixtures' / 'invalid.xml'
     args = ['--file', str(xml_file), '--no-cache', 'view', 'accounts']

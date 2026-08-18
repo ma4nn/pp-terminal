@@ -29,7 +29,7 @@ STEP_PATTERN = re.compile(r'^(.+?)(?:\[(\d+)\])?$')
 
 
 def has_id_references(source: IO[bytes]) -> bool:
-    """Detects whether the xml file uses XStream ID_REFERENCES mode (root element carries an id attribute)."""
+    """True for XStream ID_REFERENCES mode, where the root element carries an id."""
     try:
         for _, element in ET.iterparse(source, events=('start',)):  # pylint: disable=c-extension-no-member
             return element.get('id') is not None
@@ -39,7 +39,7 @@ def has_id_references(source: IO[bytes]) -> bool:
 
 
 def convert_id_references(source: IO[bytes]) -> io.BytesIO:
-    """Rewrites XStream relative path references into ID_REFERENCES style, which is what ppxml2db understands."""
+    """Rewrites XStream path references into the ID_REFERENCES style ppxml2db understands."""
     parser = ET.XMLParser(resolve_entities=False, no_network=True)  # pylint: disable=c-extension-no-member
     tree = ET.parse(source, parser)  # pylint: disable=c-extension-no-member
     root = tree.getroot()
@@ -53,7 +53,10 @@ def convert_id_references(source: IO[bytes]) -> io.BytesIO:
 def _assign_ids(root: ET.Element) -> None:  # pylint: disable=c-extension-no-member
     counter = 0
     for element in root.iter():
-        if not isinstance(element.tag, str) or element.get('reference') is not None:
+        if not isinstance(element.tag, str):
+            continue
+        if element.get('reference') is not None:
+            element.attrib.pop('id', None)  # ppxml2db tells definitions from references by this attribute
             continue
         counter += 1
         element.set('id', str(counter))
@@ -78,7 +81,7 @@ def _rewrite_references(root: ET.Element) -> None:  # pylint: disable=c-extensio
 def _resolve(element: ET.Element, root: ET.Element, path: str) -> ET.Element:  # pylint: disable=c-extension-no-member
     steps = path.split('/')
     if path.startswith('/'):
-        # absolute path: the leading empty segment is followed by the name of the root element
+        # the leading empty segment is followed by the root element name
         if len(steps) < 2 or steps[1] != root.tag:
             raise InputError(f'unable to resolve reference "{path}" in line {element.sourceline}: unknown root element')
         current, steps = root, steps[2:]

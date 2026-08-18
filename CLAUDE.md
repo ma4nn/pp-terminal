@@ -95,7 +95,7 @@ uv run pp-terminal --file=depot.xml --verbose view accounts  # or --debug, a syn
 ```
 
 `--verbose`/`--debug` enable debug logging and let the original exception surface instead of a plain abort.
-`--cache` (the default) writes a `.<name>.<checksum>.pp-terminal.db` sqlite file next to the xml.
+`--cache` (the default) writes a `.<xml-stem>.<checksum>.pp-terminal.db` sqlite file next to the xml.
 
 ## Architecture
 

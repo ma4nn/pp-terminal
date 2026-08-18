@@ -33,7 +33,7 @@ def convert(xml: str) -> ET.Element:
 
 
 def reference_targets(root: ET.Element) -> list[tuple[str, str]]:
-    """Maps each reference to the structural path of its target, so both xml flavors become comparable."""
+    """Maps each reference to its target's structural path, making both xml flavors comparable."""
     paths: dict[ET.Element, str] = {}
 
     def walk(element: ET.Element, path: str) -> None:
@@ -70,11 +70,12 @@ def test_reference_elements_do_not_get_an_id() -> None:
 
 
 def test_pre_existing_ids_are_replaced() -> None:
-    """Keeping them would let the synthetic sequence collide with an id that is already in use."""
-    root = convert('<client><portfolio id="3"><uuid>x</uuid></portfolio><other/><account reference="../portfolio"/></client>')
+    """Keeping them would let the synthetic sequence collide with an id already in use."""
+    root = convert('<client><portfolio id="3"><uuid>x</uuid></portfolio><other/><account id="4" reference="../portfolio"/></client>')
 
     ids = [element.get('id') for element in root.iter() if element.get('id') is not None]
     assert len(ids) == len(set(ids)), f'ids must stay unique, got {ids}'
+    assert root.find('account').get('id') is None, 'a reference must never keep an id, that is how ppxml2db spots definitions'
     assert root.find('account').get('reference') == root.find('portfolio').get('id')
 
 
@@ -88,7 +89,7 @@ def test_reference_with_index_predicate() -> None:
 
 
 def test_reference_without_predicate_resolves_to_first_matching_child() -> None:
-    """XStream omits an explicit [1], so a bare step must not be read as "any same-named child"."""
+    """XStream omits an explicit [1]; a bare step is not "any same-named child"."""
     root = convert("""<client>
         <securities><security><uuid>a</uuid></security><security><uuid>b</uuid></security></securities>
         <link reference="../securities/security"/>
@@ -117,7 +118,7 @@ def test_absolute_reference() -> None:
     '../securities/security[0]',  # XStream indexes are 1-based
     '../nowhere',                 # no such child
     '../../../..',                # beyond the root element
-    '/nonclient/securities/security',  # absolute path with an unknown root element
+    '/nonclient/securities/security',  # unknown root element
 ])
 def test_unresolvable_reference(reference: str) -> None:
     with pytest.raises(InputError):
@@ -146,7 +147,7 @@ def test_has_id_references(xml: str, expected: bool) -> None:
 
 
 def test_references_resolve_like_the_id_flavor(request: TopRequest) -> None:
-    """Every reference of the no-ids fixture must end up pointing at the same element as in its "XML with ids" twin."""
+    """Every reference must end up at the same element as in the "XML with ids" twin."""
     fixtures = request.path.parent.parent / 'fixtures'
     with (fixtures / 'kommer.xml').open(mode='rb') as source:
         converted = ET.parse(convert_id_references(source)).getroot()

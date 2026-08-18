@@ -21,7 +21,7 @@ from datetime import datetime, date as DateType
 import logging
 import math
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from typing_extensions import Annotated
 
 import click
@@ -39,7 +39,7 @@ from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import Money, Percent, TaxPaidSchema
 from pp_terminal.exceptions import InputError
 from pp_terminal.output.strategy import OutputStrategy, Console
-from pp_terminal.output.table_decorator import TableOptions
+from pp_terminal.output.table_decorator import TableOptions, format_value
 from pp_terminal.utils.config import Config, ConfigModel, command_config
 from pp_terminal.utils.helper import footer
 from pp_terminal.utils.options import tax_rate_callback, allowance_callback
@@ -53,7 +53,10 @@ class PmtConfig(ConfigModel):
     returns: list[Annotated[float, Field(ge=0, le=100)] | dict[str, Annotated[float, Field(ge=0, le=100)]]] | None = None
     end_date: DateType | None = None
 
-_RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate', 'startCapital']
+_RESULT_COLUMNS = ['assumedReturn', 'startCapital', 'currency', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate']
+
+# Money and Percent are both plain floats, so the currency column would otherwise put a symbol on the rates too
+_PERCENT_COLUMNS = frozenset({'assumedReturn', 'grossRate', 'netRate'})
 
 # reserved key in a per-category returns table that sets the rate for every category not listed explicitly
 DEFAULT_RETURN_KEY = '*'
@@ -242,6 +245,7 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
         net = gross - tax
         rows.append({
             'assumedReturn': Percent(assumed_return),
+            'currency': portfolio.base_currency,
             'grossPerYear': Money(gross),
             'grossRate': Percent(gross / start_capital * 100),
             'netPerYear': Money(net),
@@ -251,6 +255,12 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
         })
 
     return pd.DataFrame(rows)[_RESULT_COLUMNS]
+
+
+def _format_value(value: Any, column_name: str, row: pd.Series) -> str:
+    if column_name in _PERCENT_COLUMNS:
+        return format_value(value, column_name, row.drop('currency', errors='ignore'))
+    return format_value(value, column_name, row)
 
 
 def _next_step_hint(gross: Money | None, cash: Money, gross_rate: Percent | None) -> str:
@@ -334,7 +344,8 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
     ))
     console.print(*output.result_table(
         result,
-        TableOptions(title=f"Amortization Withdrawal on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=False)
+        TableOptions(title=f"Amortization Withdrawal on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=False,
+                     value_formatter=_format_value)
     ))
 
     cash = Money(_active_account_balances(PortfolioSnapshot(portfolio, date)).sum())

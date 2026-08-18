@@ -23,10 +23,10 @@ import logging
 import pandas as pd
 import pytest
 
-from pp_terminal.commands.simulate_pmt import amortization_factor, blended_return_from_allocation, prepare_pmt_result, split_return_scenario, _next_step_hint, _resolve_return_scenarios
+from pp_terminal.commands.simulate_pmt import amortization_factor, blended_return_from_allocation, prepare_pmt_result, split_return_scenario, _format_value, _next_step_hint, _resolve_return_scenarios
 from pp_terminal.utils.config import empty_config
 from pp_terminal.domain.portfolio import Portfolio
-from pp_terminal.domain.schemas import AccountType, TransactionType
+from pp_terminal.domain.schemas import AccountType, Money, Percent, TransactionType
 from pp_terminal.exceptions import InputError
 
 
@@ -136,6 +136,20 @@ def test_prepare_pmt_result_reports_the_start_capital_it_is_based_on(cash_only_p
     assert list(result['startCapital']) == pytest.approx([100000.0, 100000.0])
     # the rates the table shows are percentages of exactly this amount
     assert result.iloc[0]['grossPerYear'] == pytest.approx(result.iloc[0]['startCapital'] * result.iloc[0]['grossRate'] / 100)
+
+
+def test_prepare_pmt_result_labels_amounts_with_the_base_currency(cash_only_portfolio: Portfolio) -> None:
+    result = prepare_pmt_result(cash_only_portfolio, empty_config(), _DATE, _TAX_RATE, [5.0, 2.0], _END_DATE)
+
+    assert list(result['currency']) == [cash_only_portfolio.base_currency] * 2
+
+
+def test_percent_columns_are_not_formatted_as_money() -> None:
+    """Money and Percent are both plain floats, so only the column name keeps the currency off the rates."""
+    row = pd.Series({'currency': 'EUR', 'grossRate': Percent(5.73), 'grossPerYear': Money(1338.44)})
+
+    assert '€' not in _format_value(row['grossRate'], 'grossRate', row)
+    assert '€' in _format_value(row['grossPerYear'], 'grossPerYear', row)
 
 
 def test_prepare_pmt_result_zero_return_spreads_capital_evenly(cash_only_portfolio: Portfolio) -> None:

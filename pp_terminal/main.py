@@ -111,7 +111,7 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Optional[bool],
             typer.Option("--version", callback=version_callback, is_eager=True),  # declared the option name to avoid --no-version
         ] = None,
-        verbose: Annotated[Optional[bool], typer.Option('--verbose', help='Enable verbose logging.')] = None,
+        verbose: Annotated[Optional[bool], typer.Option('--verbose', '--debug', help='Enable verbose logging.')] = None,
 ) -> None:
 
     # commands like "init" bootstrap a config and thus need neither a file nor a portfolio

@@ -91,10 +91,11 @@ uv run mypy .
 ```bash
 uv run pp-terminal --version
 uv run pp-terminal --file=depot.xml view accounts
-uv run pp-terminal --file=depot.xml --debug view accounts  # Debug mode with SQLite cache
+uv run pp-terminal --file=depot.xml --verbose view accounts  # or --debug, a synonym
 ```
 
-Debug mode creates `.cache.db` for inspection.
+`--verbose`/`--debug` enable debug logging and let the original exception surface instead of a plain abort.
+`--cache` (the default) writes a `.<name>.<checksum>.pp-terminal.db` sqlite file next to the xml.
 
 ## Architecture
 

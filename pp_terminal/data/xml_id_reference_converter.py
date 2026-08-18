@@ -27,6 +27,15 @@ from pp_terminal.exceptions import InputError
 
 STEP_PATTERN = re.compile(r'^(.+?)(?:\[(\d+)\])?$')
 
+# tags whose id attribute ppxml2db reads to tell a definition from a back-reference; any other element
+# only needs an id once something references it, and giving all of them one costs real memory
+ID_TAGS = frozenset({
+    'security', 'account', 'referenceAccount', 'accountFrom', 'accountTo',
+    'portfolio', 'portfolioFrom', 'portfolioTo',
+    'account-transaction', 'accountTransaction', 'portfolio-transaction', 'portfolioTransaction',
+    'transactionFrom', 'transactionTo', 'crossEntry', 'root', 'classification',
+})
+
 
 def has_id_references(source: IO[bytes]) -> bool:
     """True for XStream ID_REFERENCES mode, where the root element carries an id."""
@@ -40,42 +49,49 @@ def has_id_references(source: IO[bytes]) -> bool:
 
 def convert_id_references(source: IO[bytes]) -> io.BytesIO:
     """Rewrites XStream path references into the ID_REFERENCES style ppxml2db understands."""
-    parser = ET.XMLParser(resolve_entities=False, no_network=True)  # pylint: disable=c-extension-no-member
+    parser = ET.XMLParser(remove_blank_text=True, resolve_entities=False, no_network=True)  # pylint: disable=c-extension-no-member
     tree = ET.parse(source, parser)  # pylint: disable=c-extension-no-member
     root = tree.getroot()
 
-    _assign_ids(root)
-    _rewrite_references(root)
+    references = _resolve_references(root)
+    # membership in the target set is lxml proxy identity, which only holds while references keeps them alive
+    _assign_ids(root, {target for _, target in references})
+
+    for element, target in references:
+        target_id = target.get('id')
+        if target_id is None:
+            raise InputError(f'reference "{element.get("reference")}" in line {element.sourceline} points to another reference')
+        element.set('reference', target_id)
 
     return io.BytesIO(ET.tostring(tree, xml_declaration=True, encoding='UTF-8'))  # pylint: disable=c-extension-no-member
 
 
-def _assign_ids(root: ET.Element) -> None:  # pylint: disable=c-extension-no-member
-    counter = 0
-    for element in root.iter():
-        if not isinstance(element.tag, str):
-            continue
-        if element.get('reference') is not None:
-            element.attrib.pop('id', None)  # ppxml2db tells definitions from references by this attribute
-            continue
-        counter += 1
-        element.set('id', str(counter))
-
-
-def _rewrite_references(root: ET.Element) -> None:  # pylint: disable=c-extension-no-member
+def _resolve_references(root: ET.Element) -> list[tuple[ET.Element, ET.Element]]:  # pylint: disable=c-extension-no-member
+    references = []
     for element in root.iter():
         if not isinstance(element.tag, str):
             continue
         path = element.get('reference')
-        if path is None:
+        if path is not None:
+            references.append((element, _resolve(element, root, path)))
+    return references
+
+
+def _assign_ids(root: ET.Element, targets: set[ET.Element]) -> None:  # pylint: disable=c-extension-no-member
+    counter = 0
+    for element in root.iter():
+        if not isinstance(element.tag, str):
             continue
-
-        target = _resolve(element, root, path)
-        target_id = target.get('id')
-        if target_id is None:
-            raise InputError(f'reference "{path}" in line {element.sourceline} points to another reference')
-
-        element.set('reference', target_id)
+        # drop foreign ids before anything can skip past: ppxml2db tells a definition from a back-reference
+        # by this attribute, and an id we did not assign could collide with the synthetic sequence
+        element.attrib.pop('id', None)
+        if element.get('reference') is not None:
+            continue
+        # the root always gets one, otherwise has_id_references would not recognize the converted result
+        if element is not root and element.tag not in ID_TAGS and element not in targets:
+            continue
+        counter += 1
+        element.set('id', str(counter))
 
 
 def _resolve(element: ET.Element, root: ET.Element, path: str) -> ET.Element:  # pylint: disable=c-extension-no-member

@@ -53,7 +53,7 @@ class PmtConfig(ConfigModel):
     returns: list[Annotated[float, Field(ge=0, le=100)] | dict[str, Annotated[float, Field(ge=0, le=100)]]] | None = None
     end_date: DateType | None = None
 
-_RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate']
+_RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate', 'startCapital']
 
 # reserved key in a per-category returns table that sets the rate for every category not listed explicitly
 DEFAULT_RETURN_KEY = '*'
@@ -247,6 +247,7 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
             'netPerYear': Money(net),
             'netPerMonth': Money(net / 12),
             'netRate': Percent(net / start_capital * 100),
+            'startCapital': Money(start_capital),  # constant per run, but the only way it reaches csv/json output
         })
 
     return pd.DataFrame(rows)[_RESULT_COLUMNS]

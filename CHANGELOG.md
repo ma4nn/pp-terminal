@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Support for Portfolio Performance files saved as plain "XML" (without id attributes)
+- Start capital the withdrawal is based on in `simulate pmt`
+- `--debug` as a synonym for `--verbose`
+- Debug logging of the config and Portfolio Performance file paths actually used
+
+### Fixed
+
+- Currency columns in `view accounts` no longer appear in a random order
+
 ## [0.11.0] - 2026-07-09
 
 ### Added 

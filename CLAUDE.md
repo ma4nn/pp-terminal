@@ -71,6 +71,11 @@ To update the ppxml2db submodule run:
 git submodule update --remote
 ```
 
+After updating, re-check which tags ppxml2db reads an `id` attribute from and keep `ID_TAGS`
+(`data/xml_id_reference_converter.py`) in sync — a tag missing there makes those entities vanish from the
+database without any error. Most of them are not covered by the fixtures, so only `PPXML2DB_ID_TAGS` in
+`tests/data/test_xml_id_reference_converter.py` guards this.
+
 ### Testing
 ```bash
 make test               # Run pytest test suite

@@ -129,6 +129,15 @@ def test_prepare_pmt_result_cash_only_is_untaxed(cash_only_portfolio: Portfolio)
     assert row['netRate'] == pytest.approx(row['grossRate'])  # untaxed cash: net equals gross
 
 
+def test_prepare_pmt_result_reports_the_start_capital_it_is_based_on(cash_only_portfolio: Portfolio) -> None:
+    result = prepare_pmt_result(cash_only_portfolio, empty_config(), _DATE, _TAX_RATE, [5.0, 2.0], _END_DATE)
+
+    # repeated per row, since csv and json output have no channel for anything but the table
+    assert list(result['startCapital']) == pytest.approx([100000.0, 100000.0])
+    # the rates the table shows are percentages of exactly this amount
+    assert result.iloc[0]['grossPerYear'] == pytest.approx(result.iloc[0]['startCapital'] * result.iloc[0]['grossRate'] / 100)
+
+
 def test_prepare_pmt_result_zero_return_spreads_capital_evenly(cash_only_portfolio: Portfolio) -> None:
     result = prepare_pmt_result(cash_only_portfolio, empty_config(), _DATE, _TAX_RATE, [0.0], _END_DATE)
 

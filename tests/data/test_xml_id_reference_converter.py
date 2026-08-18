@@ -25,7 +25,7 @@ import pytest
 from _pytest.fixtures import TopRequest
 
 from pp_terminal.exceptions import InputError
-from pp_terminal.data.xml_id_reference_converter import convert_id_references, has_id_references
+from pp_terminal.data.xml_id_reference_converter import ID_TAGS, convert_id_references, has_id_references
 
 
 def convert(xml: str) -> ET.Element:
@@ -53,11 +53,41 @@ def reference_targets(root: ET.Element) -> list[tuple[str, str]]:
 
 
 def test_ids_are_assigned_in_document_order() -> None:
+    """Only the root and the tags ppxml2db inspects get one - iding all 36k elements of a real file costs memory."""
     root = convert('<client><securities><security><uuid>x</uuid></security></securities></client>')
 
     assert [(el.tag, el.get('id')) for el in root.iter()] == [
-        ('client', '1'), ('securities', '2'), ('security', '3'), ('uuid', '4')
+        ('client', '1'), ('securities', None), ('security', '2'), ('uuid', None)
     ]
+
+
+# spelled out rather than derived from ID_TAGS, so trimming that set fails here instead of silently
+# dropping entities; these are every tag whose id attribute ppxml2db reads (ppxml2db.py:412-421 and 527)
+PPXML2DB_ID_TAGS = (
+    'security', 'account', 'referenceAccount', 'accountFrom', 'accountTo',
+    'portfolio', 'portfolioFrom', 'portfolioTo',
+    'account-transaction', 'accountTransaction', 'portfolio-transaction', 'portfolioTransaction',
+    'transactionFrom', 'transactionTo', 'crossEntry', 'root', 'classification',
+)
+
+
+def test_tags_ppxml2db_inspects_always_get_an_id() -> None:
+    """Nothing references these, yet ppxml2db needs the id to tell a definition from a back-reference."""
+    assert ID_TAGS == frozenset(PPXML2DB_ID_TAGS)
+
+    root = convert('<client><wrapper>' + ''.join(f'<{tag}/>' for tag in PPXML2DB_ID_TAGS) + '</wrapper></client>')
+
+    missing = [tag for tag in PPXML2DB_ID_TAGS if root.find(f'wrapper/{tag}').get('id') is None]
+    assert not missing, f'ppxml2db reads the id attribute of {missing}'
+
+
+def test_referenced_element_gets_an_id_regardless_of_its_tag() -> None:
+    root = convert('<client><some><thing/><thing/></some><link reference="../some/thing[2]"/></client>')
+
+    referenced = root.findall('some/thing')[1]
+    assert referenced.get('id') is not None
+    assert root.findall('some/thing')[0].get('id') is None
+    assert root.find('link').get('reference') == referenced.get('id')
 
 
 def test_reference_elements_do_not_get_an_id() -> None:
@@ -71,10 +101,13 @@ def test_reference_elements_do_not_get_an_id() -> None:
 
 def test_pre_existing_ids_are_replaced() -> None:
     """Keeping them would let the synthetic sequence collide with an id already in use."""
-    root = convert('<client><portfolio id="3"><uuid>x</uuid></portfolio><other/><account id="4" reference="../portfolio"/></client>')
+    # 'stray' is neither in ID_TAGS nor a reference target, so nothing would otherwise overwrite its id
+    root = convert('<client><portfolio id="3"><uuid>x</uuid></portfolio><stray id="2"/><other/>'
+                   '<account id="4" reference="../portfolio"/></client>')
 
     ids = [element.get('id') for element in root.iter() if element.get('id') is not None]
     assert len(ids) == len(set(ids)), f'ids must stay unique, got {ids}'
+    assert root.find('stray').get('id') is None, 'an id we do not assign ourselves can collide with the synthetic sequence'
     assert root.find('account').get('id') is None, 'a reference must never keep an id, that is how ppxml2db spots definitions'
     assert root.find('account').get('reference') == root.find('portfolio').get('id')
 

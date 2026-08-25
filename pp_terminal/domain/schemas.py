@@ -34,6 +34,12 @@ class Attribute:
     uuid: str
     name: str
     converter: str
+    label: str = ''
+
+    @property
+    def column(self) -> str:
+        """Portfolio Performance's own table header, which is shorter than the descriptive name."""
+        return self.label or self.name
 
 
 @dataclass(frozen=True)

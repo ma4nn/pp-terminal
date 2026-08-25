@@ -113,14 +113,16 @@ def print_securities(  # pylint: disable=too-many-locals
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
 
+    requested_by_user = fields is not None
     if fields is None:
         config_fields = command_config(config, ViewSecuritiesConfig).fields
+        requested_by_user = bool(config_fields)
         fields = ','.join(config_fields) if config_fields else 'SecurityId,Name,Wkn,Currency,Shares,Messages'
 
     df = prepare_securities_df(portfolio, config, output, by, active, in_stock)
     retired_ids = retired_row_labels(df)
 
-    uuid_to_name = {uuid: attr.name for uuid, attr in portfolio.security_attributes.items()}
+    uuid_to_name = {uuid: attr.column for uuid, attr in portfolio.security_attributes.items()}
     requested_columns = [uuid_to_name.get(col.strip(), col.strip()) for col in fields.split(',')]
     selected_columns = normalize_columns(requested_columns, list(df.columns))
 
@@ -132,7 +134,7 @@ def print_securities(  # pylint: disable=too-many-locals
     df = df.sort_values(by='name') if 'name' in df.columns else df
 
     def formatter_with_types(attributes: dict[str, Attribute]) -> Callable[[Any, str, pd.Series], str]:
-        renamed_types = {attr.name: attr.converter for attr in attributes.values()}
+        renamed_types = {attr.column: attr.converter for attr in attributes.values()}
         def formatter(value: Any, column_name: str, row: pd.Series) -> str:
             return format_value(value, column_name, row, renamed_types)
         return formatter
@@ -141,6 +143,7 @@ def print_securities(  # pylint: disable=too-many-locals
         df, TableOptions(
             title=f"{'Active ' if active else ''}Securities",
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
+            keep_columns=tuple(df.columns) if requested_by_user else (),
             show_index=False,
             value_formatter=formatter_with_types(portfolio.security_attributes),
             dimmed_rows=retired_ids

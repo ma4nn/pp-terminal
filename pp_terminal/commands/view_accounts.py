@@ -147,14 +147,17 @@ def print_accounts(  # pylint: disable=too-many-locals
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
 
+    requested_by_user = fields is not None
     if fields is None:
         config_fields = command_config(config, ViewAccountsConfig).fields
+        requested_by_user = bool(config_fields)
         fields = ','.join(config_fields) if config_fields else 'AccountId,Name,Type,Balance,Messages'
 
     df = prepare_accounts_df(portfolio, config, output, by, type)
     snapshot = PortfolioSnapshot(portfolio, by)
 
-    requested_columns = [col.strip() for col in fields.split(',')]
+    uuid_to_name = {uuid: attr.column for uuid, attr in portfolio.account_attributes.items()}
+    requested_columns = [uuid_to_name.get(col.strip(), col.strip()) for col in fields.split(',')]
 
     # Available columns before unstacking - need to account for accountId which will be from the index
     available_before_unstack = list(set(df.columns) - {'balance'}) + ['accountId']
@@ -174,6 +177,7 @@ def print_accounts(  # pylint: disable=too-many-locals
         df, TableOptions(
             title="Balances on Accounts",
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
+            keep_columns=tuple(df.columns) if requested_by_user else (),
             show_index=True,
             dimmed_rows=retired_ids
         )

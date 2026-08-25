@@ -83,9 +83,10 @@ def format_value(value: Any, column_name: str, row: pd.Series, attribute_types: 
 
 
 @dataclass
-class TableOptions:  # pylint: disable=too-few-public-methods
+class TableOptions:  # pylint: disable=too-few-public-methods,too-many-instance-attributes
     title: str = ''
     caption: str = ''
+    keep_columns: tuple[str, ...] = ()  # columns the user asked for explicitly, kept even when empty
     show_index: bool = True
     show_total: bool = True
     footer_lines: int = 0
@@ -106,7 +107,7 @@ class TableDecorator(Table):
         return self._options.show_total and self._options.footer_lines == 0  # multiple footer lines are not supported in rich by default
 
     def add_df(self, df: pd.DataFrame) -> Table:
-        df = df.pipe(drop_empty_values)
+        df = df.pipe(drop_empty_values, self._options.keep_columns)
         if df.empty:
             return self
 

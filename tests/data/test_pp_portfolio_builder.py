@@ -84,6 +84,17 @@ def test_import_xml_without_ids_matches_id_flavor(request: TopRequest) -> None:
                                       getattr(with_ids, name).drop(columns=diverging, errors='ignore'))
 
 
+def test_import_boolean_attribute(request: TopRequest) -> None:
+    """Portfolio Performance writes a java.lang.Boolean attribute as <boolean>true</boolean>."""
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'boolean_attribute.ids.xml')
+
+    assert 'sustainable' in portfolio.security_attributes
+    values = portfolio.securities.set_index('name')['sustainable']
+    assert values['Sustainable ETF'] is True
+    assert values['Conventional ETF'] is False
+    assert pd.isna(values['Unrated ETF'])
+
+
 def test_import_pp_empty_xml(request: TopRequest) -> None:
     CachedPpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'empty.ids.xml')
 

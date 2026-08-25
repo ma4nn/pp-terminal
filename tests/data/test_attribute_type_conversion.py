@@ -134,6 +134,42 @@ def test_convert_string_converter() -> None:
     assert f'{get_converter_column_name(attr_uuid)}' not in result.columns
 
 
+def test_convert_boolean_converter() -> None:
+    """Portfolio Performance serializes a java.lang.Boolean attribute as "true"/"false"."""
+    attr_uuid = 'test-attr-uuid-008'
+    converter = 'name.abuchen.portfolio.model.AttributeType$BooleanConverter'
+    df = pd.DataFrame({
+        'name': ['ETF A', 'ETF B', 'ETF C'],
+        attr_uuid: ['true', 'false', None],
+        f'{get_converter_column_name(attr_uuid)}': [converter, converter, converter],
+    })
+
+    attributes = {attr_uuid: Attribute(uuid=attr_uuid, name='test-attr', converter=converter)}
+    result = convert_attribute_types(df, attributes)
+
+    assert result.loc[0, attr_uuid] is True
+    assert result.loc[1, attr_uuid] is False
+    assert pd.isna(result.loc[2, attr_uuid])
+    assert f'{get_converter_column_name(attr_uuid)}' not in result.columns
+
+
+def test_convert_boolean_converter_rejects_other_values(caplog: LogCaptureFixture) -> None:
+    """Anything but true/false is dropped rather than silently read as False."""
+    attr_uuid = 'test-attr-uuid-009'
+    converter = 'name.abuchen.portfolio.model.AttributeType$BooleanConverter'
+    df = pd.DataFrame({
+        'name': ['ETF A'],
+        attr_uuid: ['yes'],
+        f'{get_converter_column_name(attr_uuid)}': [converter],
+    })
+
+    attributes = {attr_uuid: Attribute(uuid=attr_uuid, name='test-attr', converter=converter)}
+    result = convert_attribute_types(df, attributes)
+
+    assert pd.isna(result.loc[0, attr_uuid])
+    assert 'Failed to parse' in caplog.text
+
+
 def test_convert_unknown_converter(caplog: LogCaptureFixture) -> None:
     attr_uuid = 'test-attr-uuid-006'
     df = pd.DataFrame({

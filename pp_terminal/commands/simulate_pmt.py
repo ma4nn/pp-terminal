@@ -131,13 +131,24 @@ def _account_categories(portfolio: Portfolio, balances: pd.Series, taxonomy: str
     return categories
 
 
-def _active_account_balances(snapshot: PortfolioSnapshot) -> pd.Series:
-    """Deposit-account balances excluding retired accounts, which no longer back a withdrawal."""
-    balances = snapshot.balances
-    retired = retired_row_labels(snapshot.portfolio.deposit_accounts)
+def _exclude_retired_accounts(series: pd.Series, accounts: pd.DataFrame) -> pd.Series:
+    """Drops the rows held in a retired account, which no longer backs a withdrawal."""
+    retired = retired_row_labels(accounts)
     if not retired:
-        return balances
-    return balances[~balances.index.get_level_values('accountId').isin(retired)]
+        return series
+    return series[~series.index.get_level_values('accountId').isin(retired)]
+
+
+def _active_account_balances(snapshot: PortfolioSnapshot) -> pd.Series:
+    return _exclude_retired_accounts(snapshot.balances, snapshot.portfolio.deposit_accounts)
+
+
+def _active_holdings(snapshot: PortfolioSnapshot) -> pd.Series:
+    return _exclude_retired_accounts(snapshot.shares, snapshot.portfolio.securities_accounts)
+
+
+def _active_security_values(snapshot: PortfolioSnapshot) -> pd.Series:
+    return _exclude_retired_accounts(snapshot.values, snapshot.portfolio.securities_accounts)
 
 
 def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonomy: str, returns_by_category: dict[str, float]) -> Percent:
@@ -146,7 +157,7 @@ def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonom
     '*' default (if set), and items unclassified in the taxonomy weigh in at 0%."""
     default_return, category_overrides = split_return_scenario(returns_by_category)
     snapshot = PortfolioSnapshot(portfolio, date)
-    security_values = snapshot.values.groupby('securityId').sum()
+    security_values = _active_security_values(snapshot).groupby('securityId').sum()
     account_values = _active_account_balances(snapshot).groupby('accountId').sum()
 
     total = security_values.sum() + account_values.sum()
@@ -187,8 +198,8 @@ def _taxable_position(
         exempt_rate: Percent,
         tax_csv_data: DataFrame[TaxPaidSchema] | None
 ) -> tuple[Money, Money]:
-    """Market value of all held securities and their taxable gain if sold today at the current FIFO frontier."""
-    holdings = snapshot.shares
+    """Market value of the securities held in active accounts and their taxable gain if sold today at the current FIFO frontier."""
+    holdings = _active_holdings(snapshot)
     if holdings.empty:
         return Money(0), Money(0)
 

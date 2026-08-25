@@ -280,6 +280,38 @@ def test_blended_return_unconfigured_class_contributes_zero(portfolio_with_price
     assert blended_return_from_allocation(portfolio, _DATE, 'AA', {'Bonds': 2.0}) == pytest.approx(0.0)
 
 
+def _retire_securities_account(portfolio: Portfolio, account_id: str) -> Portfolio:
+    accounts = portfolio.securities_accounts.copy()
+    accounts.loc[account_id, 'isRetired'] = True
+
+    return Portfolio(
+        accounts=accounts,
+        transactions=portfolio.securities_account_transactions,
+        securities=portfolio.securities,
+        prices=portfolio.prices,
+        taxonomy_assignments=portfolio.taxonomy_assignments,
+    )
+
+
+def test_start_capital_excludes_retired_securities_account(portfolio_with_prices: Portfolio) -> None:
+    portfolio = _retire_securities_account(portfolio_with_prices, 'acc-2')  # holds the 5 gifted shares
+
+    result = prepare_pmt_result(portfolio, empty_config(), _DATE, _TAX_RATE, [5.0], _END_DATE, allowance=0.0)
+
+    assert result.iloc[0]['startCapital'] == pytest.approx(8000.0)  # 40 shares @ 200 left in acc-1
+
+
+def test_blended_return_excludes_retired_securities_account(portfolio_with_prices: Portfolio) -> None:
+    portfolio = _with_cash_and_taxonomy(_retire_securities_account(portfolio_with_prices, 'acc-2'), 1000.0, [
+        ['AA', 'sec-1', 'security', 'Equity', 10000],
+        ['AA', 'dep-1', 'account', 'Cash', 10000],
+    ])
+
+    blended = blended_return_from_allocation(portfolio, _DATE, 'AA', {'Equity': 5.0, 'Cash': 1.0})
+
+    assert blended == pytest.approx((8000.0 * 5.0 + 1000.0 * 1.0) / 9000.0)  # retired account drops out of the weights
+
+
 def test_blended_return_excludes_retired_cash_without_warning(portfolio_with_prices: Portfolio, caplog: pytest.LogCaptureFixture) -> None:
     portfolio = _with_cash_and_taxonomy(portfolio_with_prices, 1000.0, [['AA', 'sec-1', 'security', 'Equity', 10000]], retired=True)
 

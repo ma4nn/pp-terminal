@@ -14,11 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Start capital the withdrawal is based on in `simulate pmt`
 - `--debug` as a synonym for `--verbose`
 - Debug logging of the config and Portfolio Performance file paths actually used
+- `view accounts --inactive` and `view securities --inactive` to also list retired (inactive) entries
 
 ### Changed
 
 - Attribute columns are labelled with Portfolio Performance's column label instead of the longer attribute name
   (e.g. `TER` instead of `Gesamtkostenquote (TER)`), which is also what `--fields` now matches
+- `view accounts` and `view securities` hide retired entries unless `--inactive` is passed;
+  `view securities --active` is gone, as is the `active_only` argument of the `query_securities` MCP tool
 
 ### Fixed
 
@@ -26,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Errors raised by a command (e.g. a mistyped `--fields` value) print a message instead of a stack trace
 - Columns requested via `--fields` or the config file are no longer dropped from the table when they hold no values
 - Currency columns in `view accounts` no longer appear in a random order
+- `view accounts` lists accounts with a zero or negative balance and accounts without any transaction
 
 ## [0.11.0] - 2026-07-09
 

@@ -224,8 +224,8 @@ def test_in_stock_excludes_securities_without_holdings(securities_portfolio: Por
     assert '2 entries' in output
 
 
-def test_active_excludes_retired_securities(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
-    print_securities(_make_ctx(retired_securities_portfolio), active=True)
+def test_retired_securities_are_excluded_by_default(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
+    print_securities(_make_ctx(retired_securities_portfolio))
 
     output = capsys.readouterr().out
 
@@ -234,8 +234,8 @@ def test_active_excludes_retired_securities(retired_securities_portfolio: Portfo
     assert '1 entries' in output
 
 
-def test_retired_securities_listed_by_default_without_is_retired_column(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
-    print_securities(_make_ctx(retired_securities_portfolio))
+def test_retired_securities_listed_without_is_retired_column_when_inactive_included(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
+    print_securities(_make_ctx(retired_securities_portfolio), inactive=True)
 
     output = capsys.readouterr().out
 
@@ -245,7 +245,7 @@ def test_retired_securities_listed_by_default_without_is_retired_column(retired_
 
 
 def test_is_retired_column_shown_when_requested(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
-    print_securities(_make_ctx(retired_securities_portfolio), fields='name,isRetired')
+    print_securities(_make_ctx(retired_securities_portfolio), inactive=True, fields='name,isRetired')
 
     output = capsys.readouterr().out
 
@@ -255,7 +255,7 @@ def test_is_retired_column_shown_when_requested(retired_securities_portfolio: Po
 
 
 def test_is_retired_column_dropped_when_requested_with_different_casing(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
-    print_securities(_make_ctx(retired_securities_portfolio), fields='name,IsRetired')
+    print_securities(_make_ctx(retired_securities_portfolio), inactive=True, fields='name,IsRetired')
 
     output = capsys.readouterr().out
 

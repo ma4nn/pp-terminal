@@ -19,7 +19,7 @@
 
 import logging
 from datetime import datetime
-from typing import cast, Callable, Any
+from typing import Annotated, cast, Callable, Any
 
 import typer
 import pandas as pd
@@ -51,7 +51,7 @@ def prepare_securities_df(  # pylint: disable=too-many-arguments,too-many-positi
     config: Config,
     output: OutputStrategy,
     by: datetime,
-    active: bool = False,
+    include_inactive: bool = False,
     in_stock: bool = False
 ) -> pd.DataFrame:
     securities = portfolio.securities
@@ -70,7 +70,7 @@ def prepare_securities_df(  # pylint: disable=too-many-arguments,too-many-positi
     latest_prices = snapshot.latest_prices.rename('latestPrice')
     df = df.merge(latest_prices, left_on='securityId', right_index=True, how='left')
 
-    if active and 'isRetired' in df.columns:
+    if not include_inactive and 'isRetired' in df.columns:
         df = df[~df['isRetired']]
 
     if in_stock:
@@ -103,7 +103,7 @@ def prepare_securities_df(  # pylint: disable=too-many-arguments,too-many-positi
 def print_securities(  # pylint: disable=too-many-locals
     ctx: typer.Context,
     by: datetime = datetime.now(),
-    active: bool = False,
+    inactive: Annotated[bool, typer.Option("--inactive", help="Include retired (inactive) securities")] = False,
     in_stock: bool = False,
     fields: str | None = None
 ) -> None:
@@ -119,7 +119,7 @@ def print_securities(  # pylint: disable=too-many-locals
         requested_by_user = bool(config_fields)
         fields = ','.join(config_fields) if config_fields else 'SecurityId,Name,Wkn,Currency,Shares,Messages'
 
-    df = prepare_securities_df(portfolio, config, output, by, active, in_stock)
+    df = prepare_securities_df(portfolio, config, output, by, inactive, in_stock)
     retired_ids = retired_row_labels(df)
 
     uuid_to_name = {uuid: attr.column for uuid, attr in portfolio.security_attributes.items()}
@@ -141,7 +141,7 @@ def print_securities(  # pylint: disable=too-many-locals
 
     console.print(*output.result_table(
         df, TableOptions(
-            title=f"{'Active ' if active else ''}Securities",
+            title=f"{'All ' if inactive else 'Active '}Securities",
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
             keep_columns=tuple(df.columns) if requested_by_user else (),
             show_index=False,

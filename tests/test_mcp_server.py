@@ -9,95 +9,65 @@
     (at your option) any later version.
 """
 
-from datetime import datetime
+import asyncio
+from pathlib import Path
+from typing import Any, cast
 
-import pandas as pd
 import pytest
+from _pytest.fixtures import TopRequest
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
-from pp_terminal.domain.portfolio import Portfolio
-from pp_terminal.domain.schemas import AccountType, TransactionType
-from pp_terminal.exceptions import InputError
-from pp_terminal.mcp_server import _calculate_cash_flows, _resolve_deposit_account
-
-
-def _transactions() -> pd.DataFrame:
-    return pd.DataFrame([
-        [datetime(2024, 1, 1), 'account-1', TransactionType.DEPOSIT.value, 1000.0, 'EUR'],
-        [datetime(2024, 2, 1), 'account-1', TransactionType.REMOVAL.value, -250.0, 'EUR'],
-        [datetime(2024, 3, 1), 'account-1', TransactionType.TRANSFER_IN.value, 500.0, 'EUR'],
-        [datetime(2024, 4, 1), 'account-2', TransactionType.DEPOSIT.value, 300.0, 'USD'],
-        [datetime(2024, 5, 1), 'account-2', TransactionType.REMOVAL.value, -50.0, 'USD'],
-    ], columns=['date', 'accountId', 'type', 'amount', 'currency']).set_index(['date', 'accountId'])
+from pp_terminal.mcp_server import create_mcp_server
+from pp_terminal.utils.config import empty_config
 
 
-def test_calculate_cash_flows_excludes_transfers_and_separates_currencies() -> None:
-    result = _calculate_cash_flows(_transactions())
+@pytest.fixture(name='mcp')
+def provide_mcp_server(request: TopRequest) -> FastMCP:
+    xml_file = Path(request.path.parent / 'fixtures' / 'kommer.ids.xml')
+    return create_mcp_server(xml_file, empty_config())
 
-    assert result.to_dict('records') == [
-        {
-            'currency': 'EUR',
-            'totalDeposits': 1000.0,
-            'totalWithdrawals': 250.0,
-            'netContributions': 750.0,
-            'transactionCount': 2,
-        },
-        {
-            'currency': 'USD',
-            'totalDeposits': 300.0,
-            'totalWithdrawals': 50.0,
-            'netContributions': 250.0,
-            'transactionCount': 2,
-        },
+
+def _call(mcp: FastMCP, tool: str, arguments: dict[str, Any] | None = None) -> Any:
+    """Invokes a tool the way a client does and returns its structured result."""
+    _, structured = cast(tuple[Any, dict[str, Any]], asyncio.run(mcp.call_tool(tool, arguments or {})))
+    return structured['result']
+
+
+def test_query_cash_flows_reports_every_currency(mcp: FastMCP) -> None:
+    assert _call(mcp, 'query_cash_flows') == [
+        {'currency': 'EUR', 'totalDeposits': 11500.0, 'totalWithdrawals': 0.0, 'netContributions': 11500.0, 'transactionCount': 3},
+        {'currency': 'GBP', 'totalDeposits': 2000.0, 'totalWithdrawals': 0.0, 'netContributions': 2000.0, 'transactionCount': 1},
+        {'currency': 'USD', 'totalDeposits': 3000.0, 'totalWithdrawals': 0.0, 'netContributions': 3000.0, 'transactionCount': 1},
     ]
 
 
-def test_calculate_cash_flows_can_include_transfers_and_filter_account() -> None:
-    result = _calculate_cash_flows(_transactions(), 'account-1', include_transfers=True)
-
-    assert result.to_dict('records') == [{
-        'currency': 'EUR',
-        'totalDeposits': 1500.0,
-        'totalWithdrawals': 250.0,
-        'netContributions': 1250.0,
-        'transactionCount': 3,
-    }]
+def test_query_cash_flows_honours_the_date_argument(mcp: FastMCP) -> None:
+    """The two 2019 deposits count, the later ones do not."""
+    assert _call(mcp, 'query_cash_flows', {'date': '2020-01-01'}) == [
+        {'currency': 'EUR', 'totalDeposits': 10500.0, 'totalWithdrawals': 0.0, 'netContributions': 10500.0, 'transactionCount': 2},
+    ]
 
 
-def _portfolio(names: list[str]) -> Portfolio:
-    accounts = pd.DataFrame(
-        [[name, AccountType.DEPOSIT.value, None, False, 'EUR'] for name in names]
-        + [['Testdepot', AccountType.SECURITIES.value, None, False, 'EUR']],
-        columns=['name', 'type', 'referenceAccount', 'isRetired', 'currency'],
-        index=[f'account-{i}' for i in range(len(names))] + ['securities-1'],
-    )
-    accounts.index.name = 'accountId'
-
-    return Portfolio(accounts=accounts)
+def test_query_cash_flows_restricts_to_an_account_given_by_name(mcp: FastMCP) -> None:
+    assert _call(mcp, 'query_cash_flows', {'account_id': 'Tagesgeld'}) == [
+        {'currency': 'EUR', 'totalDeposits': 500.0, 'totalWithdrawals': 0.0, 'netContributions': 500.0, 'transactionCount': 1},
+    ]
 
 
-def test_resolve_deposit_account_accepts_id_and_name() -> None:
-    portfolio = _portfolio(['Girokonto', 'Verrechnungskonto'])
-
-    assert _resolve_deposit_account(portfolio, 'account-1') == 'account-1'
-    assert _resolve_deposit_account(portfolio, 'Girokonto') == 'account-0'
-
-
-def test_resolve_deposit_account_rejects_unknown_account() -> None:
-    portfolio = _portfolio(['Girokonto'])
-
-    with pytest.raises(InputError, match="'nope' not found"):
-        _resolve_deposit_account(portfolio, 'nope')
+def test_query_cash_flows_restricts_to_an_account_given_by_id(mcp: FastMCP) -> None:
+    assert _call(mcp, 'query_cash_flows', {'account_id': 'ea9414e0-1787-46c0-92b3-8e2370eb892e'}) == [
+        {'currency': 'EUR', 'totalDeposits': 500.0, 'totalWithdrawals': 0.0, 'netContributions': 500.0, 'transactionCount': 1},
+    ]
 
 
-def test_resolve_deposit_account_rejects_securities_account() -> None:
-    portfolio = _portfolio(['Girokonto'])
-
-    with pytest.raises(InputError, match="'securities-1' not found"):
-        _resolve_deposit_account(portfolio, 'securities-1')
+def test_query_cash_flows_reports_an_unknown_account_instead_of_an_empty_result(mcp: FastMCP) -> None:
+    with pytest.raises(ToolError, match="Deposit account 'Girokonto' not found"):
+        _call(mcp, 'query_cash_flows', {'account_id': 'Girokonto'})
 
 
-def test_resolve_deposit_account_rejects_ambiguous_name() -> None:
-    portfolio = _portfolio(['Girokonto', 'Girokonto'])
+def test_query_cash_flows_is_offered_to_the_model(mcp: FastMCP) -> None:
+    tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
 
-    with pytest.raises(InputError, match='matches multiple deposit accounts'):
-        _resolve_deposit_account(portfolio, 'Girokonto')
+    assert 'query_cash_flows' in tools
+    assert set(tools['query_cash_flows'].inputSchema['properties']) == {'date', 'account_id', 'include_transfers'}

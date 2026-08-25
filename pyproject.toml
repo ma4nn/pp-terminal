@@ -19,7 +19,7 @@ dependencies = [
     "mcp (>=1.28.1,<2.0.0)",
 ]
 scripts = { pp-terminal = "pp_terminal.main:app" }
-entry-points = { "pp_terminal.commands" = { "view.accounts" = "pp_terminal.commands.view_accounts:app", "view.securities" = "pp_terminal.commands.view_securities:app", "view.taxonomies" = "pp_terminal.commands.view_taxonomies:app", "simulate.vorabpauschale" = "pp_terminal.commands.simulate_vap:app", "simulate.interest" = "pp_terminal.commands.simulate_interest:app", "simulate.share-sell" = "pp_terminal.commands.simulate_share_sell:app", "simulate.pmt" = "pp_terminal.commands.simulate_pmt:app", "validate" = "pp_terminal.commands.validate:app", "export" = "pp_terminal.commands.export:app", "init" = "pp_terminal.commands.init:app" } }
+entry-points = { "pp_terminal.commands" = { "view.accounts" = "pp_terminal.commands.view_accounts:app", "view.cash-flows" = "pp_terminal.commands.view_cash_flows:app", "view.securities" = "pp_terminal.commands.view_securities:app", "view.taxonomies" = "pp_terminal.commands.view_taxonomies:app", "simulate.vorabpauschale" = "pp_terminal.commands.simulate_vap:app", "simulate.interest" = "pp_terminal.commands.simulate_interest:app", "simulate.share-sell" = "pp_terminal.commands.simulate_share_sell:app", "simulate.pmt" = "pp_terminal.commands.simulate_pmt:app", "validate" = "pp_terminal.commands.validate:app", "export" = "pp_terminal.commands.export:app", "init" = "pp_terminal.commands.init:app" } }
 dynamic = ["version"]
 
 

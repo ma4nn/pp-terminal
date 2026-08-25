@@ -148,14 +148,23 @@ class TaxLotSellSchema(TaxLotSchema):
     netProceeds: Series[Money]
 
 
+class CashFlowResultSchema(_CoercingSchema):
+    """Schema for cumulative external cash flow results, one row per currency."""
+    currency: Series[str]
+    totalDeposits: Series[Money]
+    totalWithdrawals: Series[Money]
+    netContributions: Series[Money]
+    transactionCount: Series[int]
+
+
 class InterestResultSchema(_CoercingSchema):
     """Schema for interest calculation results."""
     accountId: Index[str]
     name: Series[str]
     currency: Series[str]
-    mean_balance: Series[Money]
-    interest: Series[Money]
-    actual_interest: Series[Money] = pa.Field(nullable=True)
+    meanBalance: Series[Money]
+    simulatedInterest: Series[Money]
+    actualInterest: Series[Money] = pa.Field(nullable=True)
 
     @classmethod
     def empty(cls, *_args: Any) -> DataFrame['InterestResultSchema']:

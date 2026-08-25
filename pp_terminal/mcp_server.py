@@ -30,12 +30,13 @@ from mcp.server.fastmcp import FastMCP
 
 from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df, summarize_sell_plan
 from pp_terminal.commands.view_accounts import prepare_accounts_df
+from pp_terminal.commands.view_cash_flows import prepare_cash_flows_df, resolve_deposit_account
 from pp_terminal.commands.view_securities import prepare_securities_df
 from pp_terminal.commands.view_taxonomies import prepare_taxonomies_df
 from pp_terminal.data.filters import clean_for_display
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.portfolio import Portfolio
-from pp_terminal.domain.schemas import AccountType, TransactionType
+from pp_terminal.domain.schemas import AccountType
 from pp_terminal.data.pp_portfolio_builder import CachedPpPortfolioBuilder
 from pp_terminal.exceptions import InputError
 from pp_terminal.output.strategy import JsonOutputStrategy
@@ -108,58 +109,6 @@ def _resolve_security(portfolio: Portfolio, security: str) -> str:
         raise InputError(f"WKN '{security}' matches multiple securities: {list(wkn_matches)}")
 
     raise InputError(f"Security '{security}' not found by ID or ISIN OR WKN")
-
-
-def _resolve_deposit_account(portfolio: Portfolio, account: str) -> str:
-    accounts = portfolio.deposit_accounts
-    if account in accounts.index:
-        return account
-
-    name_matches = accounts.index[accounts['name'] == account]
-    if len(name_matches) == 1:
-        return str(name_matches[0])
-    if len(name_matches) > 1:
-        raise InputError(f"Name '{account}' matches multiple deposit accounts: {list(name_matches)}")
-
-    raise InputError(f"Deposit account '{account}' not found by ID or name. Available: {list(accounts['name'])}")
-
-
-def _calculate_cash_flows(
-    transactions: pd.DataFrame,
-    account_id: str | None = None,
-    include_transfers: bool = False,
-) -> pd.DataFrame:
-    """Aggregate external cash flows by currency."""
-    if account_id is not None:
-        transactions = transactions[
-            transactions.index.get_level_values('accountId') == account_id
-        ]
-
-    deposit_types = [TransactionType.DEPOSIT.value]
-    withdrawal_types = [TransactionType.REMOVAL.value]
-    if include_transfers:
-        deposit_types.append(TransactionType.TRANSFER_IN.value)
-        withdrawal_types.append(TransactionType.TRANSFER_OUT.value)
-
-    deposits = transactions[transactions['type'].isin(deposit_types)]
-    withdrawals = transactions[transactions['type'].isin(withdrawal_types)]
-    deposits_by_currency = deposits.groupby('currency')['amount'].sum()
-    withdrawals_by_currency = -withdrawals.groupby('currency')['amount'].sum()
-    currencies = deposits_by_currency.index.union(withdrawals_by_currency.index)
-
-    result = pd.DataFrame(index=currencies)
-    result['totalDeposits'] = deposits_by_currency
-    result['totalWithdrawals'] = withdrawals_by_currency
-    result = result.fillna(0.0)
-    result['netContributions'] = result['totalDeposits'] - result['totalWithdrawals']
-    flow_types = deposit_types + withdrawal_types
-    result['transactionCount'] = (
-        transactions[transactions['type'].isin(flow_types)]
-        .groupby('currency').size()
-        .reindex(currencies, fill_value=0)
-        .astype(int)
-    )
-    return result.reset_index(names='currency')
 
 
 def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: disable=too-many-locals,too-many-statements
@@ -282,10 +231,9 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         """
         portfolio = _ensure_fresh_portfolio()
         by_date = datetime.fromisoformat(date) if date else datetime.now()
-        resolved_account_id = _resolve_deposit_account(portfolio, account_id) if account_id else None
-        transactions = PortfolioSnapshot(portfolio, by_date).deposit_account_transactions
-        result = _calculate_cash_flows(transactions, resolved_account_id, include_transfers)
-        return _clean_records(result)
+        resolved_account_id = resolve_deposit_account(portfolio, account_id) if account_id else None
+        df = prepare_cash_flows_df(portfolio, by_date, resolved_account_id, include_transfers)
+        return _clean_records(df)
 
     @mcp.tool()
     def simulate_vap(

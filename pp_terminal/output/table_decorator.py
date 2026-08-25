@@ -27,7 +27,7 @@ from rich.text import Text
 
 from pp_terminal.data.filters import drop_empty_values
 from pp_terminal.utils.helper import format_money, format_shares, format_percent
-from pp_terminal.domain.schemas import Money
+from pp_terminal.domain.schemas import Attribute, Money
 
 
 def camel_case_to_title(column_name: str) -> str:
@@ -82,6 +82,21 @@ def format_value(value: Any, column_name: str, row: pd.Series, attribute_types: 
     return str(value)
 
 
+def percent_attribute_columns(attributes: dict[str, Attribute]) -> tuple[str, ...]:
+    """Percentages of different entities cannot be added up, so their columns must stay out of the total."""
+    return tuple(attr.column for attr in attributes.values() if 'Percent' in attr.converter)
+
+
+def attribute_value_formatter(attributes: dict[str, Attribute]) -> Callable[[Any, str, pd.Series], str]:
+    """Formatter that knows the converter type behind each attribute column (percent, …)."""
+    converters = {attr.column: attr.converter for attr in attributes.values()}
+
+    def formatter(value: Any, column_name: str, row: pd.Series) -> str:
+        return format_value(value, column_name, row, converters)
+
+    return formatter
+
+
 @dataclass
 class TableOptions:  # pylint: disable=too-few-public-methods,too-many-instance-attributes
     title: str = ''
@@ -89,6 +104,7 @@ class TableOptions:  # pylint: disable=too-few-public-methods,too-many-instance-
     keep_columns: tuple[str, ...] = ()  # columns the user asked for explicitly, kept even when empty
     show_index: bool = True
     show_total: bool = True
+    non_summable_columns: tuple[str, ...] = ()  # numeric columns whose sum is meaningless, e.g. percentages
     footer_lines: int = 0
     value_formatter: Callable[[Any, str, pd.Series], str] = format_value
     dimmed_rows: set[Any] = field(default_factory=set)
@@ -120,12 +136,14 @@ class TableDecorator(Table):
             if first_col:
                 summary_row = pd.concat([summary_row, pd.Series(['Total'], index=[first_col])])
 
+        summable_row = summary_row.drop(list(self._options.non_summable_columns), errors='ignore')
+
         # in case we have multiple footer lines, insert the total value into the right position in the dataframe
         footer_rows = None
         if self._options.show_total and not self.show_default_footer:
             footer_rows = df.iloc[-self._options.footer_lines:, :]
             df = df.iloc[:-self._options.footer_lines, :]
-            footer_rows = pd.concat([df, summary_row.to_frame().T, footer_rows], ignore_index=True)
+            footer_rows = pd.concat([df, summable_row.to_frame().T, footer_rows], ignore_index=True)
 
         # add index column if show_index is enabled
         if self._options.show_index:
@@ -137,7 +155,7 @@ class TableDecorator(Table):
             if str(column) == 'currency':
                 continue
 
-            footer_value = self._options.value_formatter(summary_row[column], str(column), summary_row) if self._options.show_total and column in summary_row.index else ''
+            footer_value = self._options.value_formatter(summable_row[column], str(column), summable_row) if self._options.show_total and column in summable_row.index else ''
             justify = 'right' if column in summary_row.index and isinstance(summary_row[column], float) else 'left'  # type: Literal["right", "left"]
 
             if not self._options.show_index and footer_value == '' and i == 0:  # column is non-numeric

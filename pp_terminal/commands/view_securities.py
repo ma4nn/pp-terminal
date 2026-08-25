@@ -19,7 +19,7 @@
 
 import logging
 from datetime import datetime
-from typing import Annotated, cast, Callable, Any
+from typing import Annotated, cast
 
 import typer
 import pandas as pd
@@ -32,10 +32,9 @@ from pp_terminal.utils.helper import footer
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
-from pp_terminal.output.table_decorator import TableOptions, format_value
+from pp_terminal.output.table_decorator import TableOptions, attribute_value_formatter, percent_attribute_columns
 from pp_terminal.commands.message_column import messages_renderer
 from pp_terminal.validation.engine import validate_securities
-from pp_terminal.domain.schemas import Attribute
 
 app = typer.Typer()
 console = Console()
@@ -133,19 +132,14 @@ def print_securities(  # pylint: disable=too-many-locals
 
     df = df.sort_values(by='name') if 'name' in df.columns else df
 
-    def formatter_with_types(attributes: dict[str, Attribute]) -> Callable[[Any, str, pd.Series], str]:
-        renamed_types = {attr.column: attr.converter for attr in attributes.values()}
-        def formatter(value: Any, column_name: str, row: pd.Series) -> str:
-            return format_value(value, column_name, row, renamed_types)
-        return formatter
-
     console.print(*output.result_table(
         df, TableOptions(
             title=f"{'All ' if inactive else 'Active '}Securities",
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
             keep_columns=tuple(df.columns) if requested_by_user else (),
             show_index=False,
-            value_formatter=formatter_with_types(portfolio.security_attributes),
+            value_formatter=attribute_value_formatter(portfolio.security_attributes),
+            non_summable_columns=percent_attribute_columns(portfolio.security_attributes),
             dimmed_rows=retired_ids
         )
     ))

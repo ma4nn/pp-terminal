@@ -586,6 +586,18 @@ def test_view_accounts_selects_an_account_attribute_by_uuid_or_name(request: Top
     assert 'DE00 1234 5678' in result.output
 
 
+def test_view_accounts_formats_a_percent_attribute_as_percentage(request: TopRequest) -> None:
+    """A PercentConverter attribute is stored as a fraction, so the table has to render it as a percentage."""
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'account_attribute.ids.xml'
+
+    result = runner.invoke(app, ['--file', str(xml_file), '--no-cache', 'view', 'accounts', '--fields', 'name,Zinssatz'])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert '3.25%' in result.output
+    assert result.output.count('3.25%') == 1, "the total row must not sum up percentages"
+
+
 def test_requested_column_is_kept_even_when_it_has_no_values(request: TopRequest) -> None:
     """An attribute nobody filled in is still a column the user asked for, so it must not be pruned silently."""
     runner = CliRunner()

@@ -92,6 +92,35 @@ def test_footer_skips_price_column_total() -> None:
     assert '900' not in total_line
 
 
+def test_footer_skips_non_summable_columns() -> None:
+    df = pd.DataFrame({
+        'name': ['Alpha', 'Beta'],
+        'balance': [111.0, 222.0],
+        'ter': [0.1, 0.2],
+        'currency': ['EUR', 'EUR'],
+    }, index=['a', 'b'])
+    table = TableDecorator(TableOptions(show_index=False, show_total=True, non_summable_columns=('ter',)))
+    table.add_df(df)
+
+    out = _render(table)
+    total_line = _line_with(out, 'Total')
+
+    assert re.search(r'333[.,]00', total_line)
+    assert '0.3' not in total_line
+    assert '0.1' in out  # the column itself is still rendered, only its total is dropped
+
+
+def test_non_summable_columns_stay_right_justified() -> None:
+    """Dropping a column from the total must not turn it into a left-justified text column."""
+    df = pd.DataFrame({'name': ['Alpha'], 'ter': [0.1]}, index=['a'])
+    table = TableDecorator(TableOptions(show_index=False, show_total=True, non_summable_columns=('ter',)))
+    table.add_df(df)
+
+    value_line = _line_with(re.sub(r'\x1b\[[0-9;]*m', '', _render(table)), '0.10')
+
+    assert value_line.endswith('0.10 │')
+
+
 def test_total_excludes_footer_lines_and_precedes_them() -> None:
     df = pd.DataFrame({
         'name': ['Alpha', 'Beta', 'Later'],

@@ -33,7 +33,7 @@ from pp_terminal.utils.helper import footer
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType
-from pp_terminal.output.table_decorator import TableOptions
+from pp_terminal.output.table_decorator import TableOptions, attribute_value_formatter, percent_attribute_columns
 from pp_terminal.commands.message_column import messages_renderer
 from pp_terminal.validation.engine import validate_accounts
 from pp_terminal.utils.config import Config, ConfigModel, command_config
@@ -199,6 +199,8 @@ def print_accounts(  # pylint: disable=too-many-locals
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
             keep_columns=tuple(df.columns) if requested_by_user else (),
             show_index=True,
+            value_formatter=attribute_value_formatter(portfolio.account_attributes),
+            non_summable_columns=percent_attribute_columns(portfolio.account_attributes),
             dimmed_rows=retired_ids
         )
     ))

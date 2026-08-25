@@ -336,9 +336,7 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
         f'by {end_date.strftime("%Y-%m-%d")} ({round(_horizon_years(date, end_date) * 12)} months left) at {rate_clause} '
         f'The [bold]net[/bold] amount is what is left to spend after an [bold]estimated[/bold] German tax on the drawn gain '
         f'(up to {allowance:.2f} Sparerpauschbetrag applied). All amounts are in today\'s purchasing power.\n'
-        '[dim]Restrictions: the tax (and hence net) is approximate — it applies the portfolio\'s average embedded gain '
-        'uniformly, whereas a real sale realizes specific lots (the least-taxed first), so a given year\'s actual tax is '
-        'usually lower. Run [cyan]simulate share-sell[/cyan] for the exact per-security figure, matching this row\'s gross '
+        '[dim]Restrictions: the tax (and hence net) is approximate — run [cyan]simulate share-sell[/cyan] for the exact per-security figure, matching this row\'s gross '
         'with [cyan]--target-gross[/cyan] (or its net with [cyan]--target-net[/cyan]). Cash is included at par; future '
         'Vorabpauschale and the nominal taxation of real gains are not modeled.[/dim]'
     ))

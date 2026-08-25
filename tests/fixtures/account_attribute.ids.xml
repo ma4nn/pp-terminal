@@ -26,6 +26,10 @@
             <string>bef9d57e-0502-44ff-99c7-f26554d1e9a1</string>
             <string>DE00 1234 5678</string>
           </entry>
+          <entry>
+            <string>cccc3333-0000-0000-0000-000000000003</string>
+            <double>0.0325</double>
+          </entry>
         </map>
       </attributes>
       <updatedAt>2024-01-05T00:00:00.000000Z</updatedAt>
@@ -119,6 +123,14 @@
         <target>name.abuchen.portfolio.model.Account</target>
         <type>java.lang.Boolean</type>
         <converterClass>name.abuchen.portfolio.model.AttributeType$BooleanConverter</converterClass>
+      </attribute-type>
+      <attribute-type>
+        <id>cccc3333-0000-0000-0000-000000000003</id>
+        <name>Zinssatz</name>
+        <columnLabel>Zinssatz</columnLabel>
+        <target>name.abuchen.portfolio.model.Account</target>
+        <type>java.lang.Double</type>
+        <converterClass>name.abuchen.portfolio.model.AttributeType$PercentConverter</converterClass>
       </attribute-type>
       <attribute-type>
         <id>bef9d57e-0502-44ff-99c7-f26554d1e9a1</id>

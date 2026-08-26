@@ -73,7 +73,9 @@ jobs:
         RELEASE_TAG: ${{ github.event.release.tag_name }}
       run: |
         uv venv /tmp/wheel-test
-        uv pip install --python /tmp/wheel-test/bin/python dist/*.whl
+        uv export --frozen --no-dev --no-emit-project -o /tmp/wheel-test-requirements.txt
+        uv pip install --no-build --python /tmp/wheel-test/bin/python -r /tmp/wheel-test-requirements.txt
+        uv pip install --no-build --no-deps --python /tmp/wheel-test/bin/python dist/*.whl
         /tmp/wheel-test/bin/pp-terminal --version
         if [ -n "$RELEASE_TAG" ]; then
           /tmp/wheel-test/bin/pp-terminal --version | grep -qxF "pp-terminal version: ${RELEASE_TAG#v}"

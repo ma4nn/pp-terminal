@@ -71,6 +71,11 @@ To update the ppxml2db submodule run:
 git submodule update --remote
 ```
 
+After updating, re-check which tags ppxml2db reads an `id` attribute from and keep `ID_TAGS`
+(`data/xml_id_reference_converter.py`) in sync — a tag missing there makes those entities vanish from the
+database without any error. Most of them are not covered by the fixtures, so only `PPXML2DB_ID_TAGS` in
+`tests/data/test_xml_id_reference_converter.py` guards this.
+
 ### Testing
 ```bash
 make test               # Run pytest test suite
@@ -91,10 +96,11 @@ uv run mypy .
 ```bash
 uv run pp-terminal --version
 uv run pp-terminal --file=depot.xml view accounts
-uv run pp-terminal --file=depot.xml --debug view accounts  # Debug mode with SQLite cache
+uv run pp-terminal --file=depot.xml --verbose view accounts  # or --debug, a synonym
 ```
 
-Debug mode creates `.cache.db` for inspection.
+`--verbose`/`--debug` enable debug logging and let the original exception surface instead of a plain abort.
+`--cache` (the default) writes a `.<xml-stem>.<checksum>.pp-terminal.db` sqlite file next to the xml.
 
 ## Architecture
 
@@ -150,6 +156,8 @@ Main app structure (`main.py`):
 ### Portfolio Performance XML Input
 
 The XML format used by Portfolio Performance is nothing but internal serialization format of 3rd-party library [XStream](https://x-stream.github.io/). 
+
+Both XStream reference flavors are accepted: files saved as "XML with id attributes" go straight to ppxml2db, while the default "XML" flavor (relative path references) is normalized in memory by `data/xml_id_reference_converter.py` first.
 
 ### Output System
 

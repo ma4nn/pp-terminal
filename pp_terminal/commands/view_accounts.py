@@ -20,19 +20,20 @@
 
 import logging
 from datetime import datetime
-from typing import cast
+from typing import Annotated, cast
 
 import pandas as pd
 import typer
 
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.output.column_utils import normalize_columns
-from pp_terminal.data.filters import clean_for_display, unstack_column_by_currency, pivot_taxonomy_columns, retired_row_labels
+from pp_terminal.data.filters import clean_for_display, unstack_column_by_currency, pivot_taxonomy_columns, retired_row_labels, \
+    filter_not_retired
 from pp_terminal.utils.helper import footer
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType
-from pp_terminal.output.table_decorator import TableOptions
+from pp_terminal.output.table_decorator import TableOptions, attribute_value_formatter, percent_attribute_columns
 from pp_terminal.commands.message_column import messages_renderer
 from pp_terminal.validation.engine import validate_accounts
 from pp_terminal.utils.config import Config, ConfigModel, command_config
@@ -56,7 +57,7 @@ def _prepare_df_for_display(
     if unstack_balance:
         cols_before_unstack = set(df.columns)
         df = df.pipe(unstack_column_by_currency, column='balance', base_currency=snapshot.portfolio.base_currency)
-        currency_cols = list(set(df.columns) - cols_before_unstack)
+        currency_cols = [col for col in df.columns if col not in cols_before_unstack]
     else:
         currency_cols = []
 
@@ -77,46 +78,64 @@ def _prepare_df_for_display(
     return df
 
 
-def calculate_deposit_accounts_sum(snapshot: PortfolioSnapshot) -> pd.DataFrame:
-    balances = (pd.merge(snapshot.portfolio.deposit_accounts, snapshot.balances, left_index=True, right_on='accountId', how="right", validate='one_to_many')
-            .sort_values(by='balance'))
+def _pad_accounts_without_entries(sums: pd.Series, accounts: pd.DataFrame, base_currency: str) -> pd.Series:
+    """Add zero rows for accounts that have no transactions or no open positions at all."""
+    missing = accounts.index.difference(sums.index.get_level_values('accountId'))
+    if missing.empty:
+        return sums
 
-    balances = balances[balances['balance'] >= 0.01]
+    zeros = pd.Series(0.0, name=sums.name, index=pd.MultiIndex.from_arrays(
+        [missing, accounts.loc[missing, 'currency'].fillna(base_currency)],
+        names=['accountId', 'currency']
+    ))
+
+    return pd.concat([sums, zeros])
+
+
+def _merge_accounts_with_sums(accounts: pd.DataFrame, sums: pd.Series, base_currency: str, include_inactive: bool) -> pd.DataFrame:
+    if not include_inactive:
+        accounts = accounts.pipe(filter_not_retired)
+        sums = sums[sums.index.get_level_values('accountId').isin(accounts.index)]
+
+    merged = (pd.merge(accounts, _pad_accounts_without_entries(sums, accounts, base_currency),
+                       left_index=True, right_on='accountId', how="right", validate='one_to_many')
+              .sort_values(by='balance'))
+
     # Drop columns that are not useful for display
-    cols_to_drop = [col for col in balances.columns if col in ['referenceAccount', 'isRetired']]
+    cols_to_drop = [col for col in merged.columns if col in ['referenceAccount', 'isRetired']]
     if cols_to_drop:
-        balances = balances.drop(columns=cols_to_drop)
-    return balances
+        merged = merged.drop(columns=cols_to_drop)
+    return merged
 
 
-def calculate_securities_accounts_sum(snapshot: PortfolioSnapshot) -> pd.DataFrame:
-    values = (pd.merge(snapshot.portfolio.securities_accounts, snapshot.values.groupby(['accountId', 'currency']).sum(), left_index=True, right_on='accountId', how="right", validate='one_to_many')
-            .sort_values(by='balance'))
-
-    values = values[values['balance'] >= 0.01]
-    # Drop columns that are not useful for display
-    cols_to_drop = [col for col in values.columns if col in ['referenceAccount', 'isRetired']]
-    if cols_to_drop:
-        values = values.drop(columns=cols_to_drop)
-    return values
+def calculate_deposit_accounts_sum(snapshot: PortfolioSnapshot, include_inactive: bool = False) -> pd.DataFrame:
+    return _merge_accounts_with_sums(snapshot.portfolio.deposit_accounts, snapshot.balances,
+                                     snapshot.portfolio.base_currency, include_inactive)
 
 
-def prepare_accounts_df(
+def calculate_securities_accounts_sum(snapshot: PortfolioSnapshot, include_inactive: bool = False) -> pd.DataFrame:
+    return _merge_accounts_with_sums(snapshot.portfolio.securities_accounts,
+                                     snapshot.values.groupby(['accountId', 'currency']).sum(),
+                                     snapshot.portfolio.base_currency, include_inactive)
+
+
+def prepare_accounts_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     portfolio: Portfolio,
     config: Config,
     output: OutputStrategy,
     by: datetime,
-    account_type: AccountType | None = None
+    account_type: AccountType | None = None,
+    include_inactive: bool = False
 ) -> pd.DataFrame:
     snapshot = PortfolioSnapshot(portfolio, by)
 
     df1 = None
     if account_type == AccountType.DEPOSIT or account_type is None:
-        df1 = calculate_deposit_accounts_sum(snapshot)
+        df1 = calculate_deposit_accounts_sum(snapshot, include_inactive)
 
     df2 = None
     if account_type == AccountType.SECURITIES or account_type is None:
-        df2 = calculate_securities_accounts_sum(snapshot)
+        df2 = calculate_securities_accounts_sum(snapshot, include_inactive)
 
     df = pd.concat([df1, df2])
 
@@ -137,6 +156,7 @@ def print_accounts(  # pylint: disable=too-many-locals
     ctx: typer.Context,
     type: AccountType | None = None,  # pylint: disable=redefined-builtin
     by: datetime = datetime.now(),
+    inactive: Annotated[bool, typer.Option("--inactive", help="Include retired (inactive) accounts")] = False,
     fields: str | None = None
 ) -> None:
     """
@@ -147,14 +167,17 @@ def print_accounts(  # pylint: disable=too-many-locals
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
 
+    requested_by_user = fields is not None
     if fields is None:
         config_fields = command_config(config, ViewAccountsConfig).fields
+        requested_by_user = bool(config_fields)
         fields = ','.join(config_fields) if config_fields else 'AccountId,Name,Type,Balance,Messages'
 
-    df = prepare_accounts_df(portfolio, config, output, by, type)
+    df = prepare_accounts_df(portfolio, config, output, by, type, inactive)
     snapshot = PortfolioSnapshot(portfolio, by)
 
-    requested_columns = [col.strip() for col in fields.split(',')]
+    uuid_to_name = {uuid: attr.column for uuid, attr in portfolio.account_attributes.items()}
+    requested_columns = [uuid_to_name.get(col.strip(), col.strip()) for col in fields.split(',')]
 
     # Available columns before unstacking - need to account for accountId which will be from the index
     available_before_unstack = list(set(df.columns) - {'balance'}) + ['accountId']
@@ -172,9 +195,12 @@ def print_accounts(  # pylint: disable=too-many-locals
 
     console.print(*output.result_table(
         df, TableOptions(
-            title="Balances on Accounts",
+            title=f"Balances on {'All ' if inactive else 'Active '}Accounts",
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
+            keep_columns=tuple(df.columns) if requested_by_user else (),
             show_index=True,
+            value_formatter=attribute_value_formatter(portfolio.account_attributes),
+            non_summable_columns=percent_attribute_columns(portfolio.account_attributes),
             dimmed_rows=retired_ids
         )
     ))

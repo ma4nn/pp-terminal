@@ -22,12 +22,14 @@ import os
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from typing import IO
 
 from ppxml2db.ppxml2db import PortfolioPerformanceXML2DB
 from ppxml2db import dbhelper
 from ppxml2db import ppxml2db_init
 
 from pp_terminal.exceptions import InputError
+from pp_terminal.data.xml_id_reference_converter import convert_id_references, has_id_references
 
 log = logging.getLogger(__name__)
 logging.getLogger('ppxml2db.dbhelper').setLevel(logging.INFO)  # reducing some "noise"
@@ -57,16 +59,18 @@ class Ppxml2dbWrapper:
 
     def open(self, file: Path) -> None:
         try:
-            conv = PortfolioPerformanceXML2DB(file.open(mode='rb'))  # type: ignore
-            conv.iterparse()  # type: ignore
+            with file.open(mode='rb') as source:
+                xml: IO[bytes] = source if has_id_references(source) else convert_id_references(source)
+                conv = PortfolioPerformanceXML2DB(xml)  # type: ignore
+                conv.iterparse()  # type: ignore
 
             self._connection.commit()
 
             self._validate()
-        except FileNotFoundError as e:
+        except (FileNotFoundError, InputError) as e:
             raise e
         except Exception as e:
-            raise InputError('unable to import the Portfolio Performance xml file "' + file.name + '" (is it saved as "XML with ids"?)') from e
+            raise InputError('unable to import the Portfolio Performance xml file "' + file.name + '"') from e
 
     def close(self) -> None:
         self._connection.close()  # database is deleted

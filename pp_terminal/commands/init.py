@@ -37,7 +37,7 @@ CONFIG_TEMPLATE = """\
 
 # --- General ---
 
-# Portfolio Performance file to analyse (saved as "XML with id attributes").
+# Portfolio Performance file to analyse.
 #file = "portfolio_performance.xml"
 
 # Number of decimal places for numeric output.

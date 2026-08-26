@@ -36,6 +36,7 @@ from pp_terminal.utils.config import (
     command_config,
     empty_config,
     get_config,
+    get_config_path,
     load_config,
     validated_toml_loader,
 )
@@ -85,6 +86,17 @@ def test_should_load_config_from_default_xdg_location(monkeypatch: pytest.Monkey
 
     assert result.get('precision') == 4
     assert result.get('tax', {}).get('rate') == pytest.approx(27.375)
+
+def test_should_expose_path_of_loaded_default_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: TopRequest) -> None:
+    """The main callback reports this path, once verbose logging is set up."""
+    config_dir = tmp_path / 'pp-terminal'
+    config_dir.mkdir()
+    (config_dir / 'config.toml').write_text((request.path.parent.parent / 'fixtures' / 'minimal.toml').read_text(encoding='utf-8'), encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+
+    validated_toml_loader('')
+
+    assert get_config_path() == str(config_dir / 'config.toml')
 
 def test_should_ignore_xdg_config_when_cli_config_provided(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: TopRequest) -> None:
     config_dir = tmp_path / 'pp-terminal'

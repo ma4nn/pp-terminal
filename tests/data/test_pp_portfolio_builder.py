@@ -54,10 +54,45 @@ def test_import_non_existent_file() -> None:
         CachedPpPortfolioBuilder().construct(Path('non-existing.xml'))
 
 
-@pytest.mark.parametrize("xml_file", ['kommer.xml', 'invalid.xml', 'other.xml'])
+@pytest.mark.parametrize("xml_file", ['invalid.xml', 'other.xml'])
 def test_import_invalid_xml(request: TopRequest, xml_file: str) -> None:
     with pytest.raises(InputError):
         PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / xml_file)
+
+
+def test_import_xml_without_ids(request: TopRequest) -> None:
+    """The default xml flavor uses relative path references instead of id attributes."""
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.xml')
+
+    assert not portfolio.securities.empty
+
+
+def test_import_xml_without_ids_matches_id_flavor(request: TopRequest) -> None:
+    fixtures = request.path.parent.parent / 'fixtures'
+    without_ids = PpPortfolioBuilder().construct(fixtures / 'kommer.xml')
+    with_ids = PpPortfolioBuilder().construct(fixtures / 'kommer.ids.xml')
+
+    assert without_ids.base_currency == with_ids.base_currency
+    assert without_ids.taxonomies == with_ids.taxonomies
+    assert without_ids.all_attributes == with_ids.all_attributes
+
+    # the "with ids" export carries one extra security attribute, shifting the xml bookkeeping columns too
+    diverging = ['2baac2d0-459b-4b41-a0ef-d7dad0866892', '_xmlid', '_order']
+    for name in ('securities', 'prices', 'taxonomy_assignments', 'securities_accounts', 'deposit_accounts',
+                 'securities_account_transactions', 'deposit_account_transactions'):
+        pd.testing.assert_frame_equal(getattr(without_ids, name).drop(columns=diverging, errors='ignore'),
+                                      getattr(with_ids, name).drop(columns=diverging, errors='ignore'))
+
+
+def test_import_boolean_attribute(request: TopRequest) -> None:
+    """Portfolio Performance writes a java.lang.Boolean attribute as <boolean>true</boolean>."""
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'boolean_attribute.ids.xml')
+
+    assert 'sustainable' in portfolio.security_attributes
+    values = portfolio.securities.set_index('name')['sustainable']
+    assert values['Sustainable ETF'] is True
+    assert values['Conventional ETF'] is False
+    assert pd.isna(values['Unrated ETF'])
 
 
 def test_import_pp_empty_xml(request: TopRequest) -> None:

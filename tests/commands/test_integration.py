@@ -21,6 +21,7 @@ import csv
 import io
 import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -359,22 +360,23 @@ def test_share_sell_target_net_is_hit(request: TopRequest) -> None:
     assert _net('10000') == pytest.approx(10000.0, abs=1.0)
 
 
-def test_share_sell_preserve_allocation_requires_target_net(request: TopRequest) -> None:
+def test_share_sell_preserve_allocation_requires_target_net(request: TopRequest, caplog: pytest.LogCaptureFixture) -> None:
     runner = CliRunner()
     fixtures_dir = request.path.parent.parent / 'fixtures'
 
-    result = runner.invoke(app, [
-        '--file', str(fixtures_dir / 'kommer.ids.xml'),
-        '--config', str(fixtures_dir / 'kommer.toml'),
-        '--no-cache',
-        'simulate', 'share-sell',
-        '--preserve-allocation', 'Anlagekategorien',
-        '--tax-rate', '26.375'
-    ])
+    with caplog.at_level(logging.CRITICAL):
+        result = runner.invoke(app, [
+            '--file', str(fixtures_dir / 'kommer.ids.xml'),
+            '--config', str(fixtures_dir / 'kommer.toml'),
+            '--no-cache',
+            'simulate', 'share-sell',
+            '--preserve-allocation', 'Anlagekategorien',
+            '--tax-rate', '26.375'
+        ])
 
     assert result.exit_code != 0
-    assert isinstance(result.exception, InputError)
-    assert '--preserve-allocation requires --target-net' in str(result.exception)
+    assert isinstance(result.exception, SystemExit)  # aborted with a message, the traceback needs --verbose
+    assert '--preserve-allocation requires --target-net' in caplog.text
 
 
 def test_pmt_json_output(request: TopRequest) -> None:
@@ -514,6 +516,136 @@ def test_anonymize_warns_and_keeps_output_clean(request: TopRequest, caplog: pyt
     assert 'anonymized' in caplog.text  # emitted as a log warning (stderr), not as part of the result
     assert 'anonymized' not in result.stdout
     assert json.loads(result.stdout)  # the warning must not corrupt machine-readable output
+
+
+@pytest.fixture(name='isolated_logging')
+def fixture_isolated_logging() -> Iterator[None]:
+    """Verbose runs reconfigure the root logger process-wide, which would leak into later tests."""
+    root = logging.getLogger()
+    level, handlers = root.level, root.handlers[:]
+    yield
+    root.setLevel(level)
+    root.handlers[:] = handlers
+
+
+@pytest.mark.usefixtures('isolated_logging')
+def test_input_files_are_reported_in_verbose_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: TopRequest
+) -> None:
+    """Neither path was typed by the user here, so both must be traceable from the log."""
+    xml_file = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+    config_dir = tmp_path / 'pp-terminal'
+    config_dir.mkdir()
+    (config_dir / 'config.toml').write_text(f'file = "{xml_file}"\n', encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+
+    result = CliRunner().invoke(app, ['--no-cache', '--debug', 'view', 'accounts'])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    logged = ''.join(result.output.split())  # rich wraps long paths at terminal width
+    assert str(config_dir / 'config.toml') in logged
+    assert str(xml_file) in logged
+
+
+@pytest.mark.usefixtures('isolated_logging')
+def test_mistyped_field_aborts_without_a_traceback(request: TopRequest) -> None:
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+    args = ['--file', str(xml_file), '--no-cache', 'view', 'securities', '--fields', 'name,nope']
+
+    assert isinstance(runner.invoke(app, args).exception, SystemExit)
+    assert isinstance(runner.invoke(app, ['--debug', *args]).exception, InputError)
+
+
+@pytest.mark.parametrize("flag", ['--verbose', '--debug'])
+@pytest.mark.usefixtures('isolated_logging')
+def test_verbose_logging_flags_are_synonyms(request: TopRequest, flag: str) -> None:
+    """Both let the underlying error surface instead of the bare abort a normal run produces."""
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'invalid.xml'
+    args = ['--file', str(xml_file), '--no-cache', 'view', 'accounts']
+
+    assert isinstance(runner.invoke(app, args).exception, SystemExit)
+    assert isinstance(runner.invoke(app, [flag, *args]).exception, InputError)
+
+
+@pytest.mark.parametrize("field", [
+    'bef9d57e-0502-44ff-99c7-f26554d1e9a1',  # the attribute uuid, as the error message on a typo suggests
+    'IBAN',                                  # its friendly name
+    'iban',                                  # names match case-insensitively
+])
+def test_view_accounts_selects_an_account_attribute_by_uuid_or_name(request: TopRequest, field: str) -> None:
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'account_attribute.ids.xml'
+
+    result = runner.invoke(app, [
+        '--file', str(xml_file), '--output', 'csv', '--no-cache', 'view', 'accounts', '--fields', f'name,{field}'
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert 'DE00 1234 5678' in result.output
+
+
+def test_view_accounts_formats_a_percent_attribute_as_percentage(request: TopRequest) -> None:
+    """A PercentConverter attribute is stored as a fraction, so the table has to render it as a percentage."""
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'account_attribute.ids.xml'
+
+    result = runner.invoke(app, ['--file', str(xml_file), '--no-cache', 'view', 'accounts', '--fields', 'name,Zinssatz'])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert '3.25%' in result.output
+    assert result.output.count('3.25%') == 1, "the total row must not sum up percentages"
+
+
+def test_requested_column_is_kept_even_when_it_has_no_values(request: TopRequest) -> None:
+    """An attribute nobody filled in is still a column the user asked for, so it must not be pruned silently."""
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'account_attribute.ids.xml'
+
+    result = runner.invoke(app, ['--file', str(xml_file), '--no-cache', 'view', 'accounts', '--fields', 'name,Fiktiv'])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert 'Fiktiv' in result.output
+
+
+def test_columns_from_the_config_file_are_kept_even_when_empty(request: TopRequest, tmp_path: Path) -> None:
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'account_attribute.ids.xml'
+    config_file = tmp_path / 'config.toml'
+    config_file.write_text(f'file = "{xml_file}"\n\n[commands.view.accounts]\nfields = ["name", "Fiktiv"]\n', encoding='utf-8')
+
+    result = runner.invoke(app, ['--config', str(config_file), '--no-cache', 'view', 'accounts'])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert 'Fiktiv' in result.output
+
+
+def test_empty_columns_are_still_pruned_from_the_default_view(request: TopRequest) -> None:
+    """Pruning keeps the default table readable; only an explicit request overrides it."""
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'account_attribute.ids.xml'
+
+    result = runner.invoke(app, ['--file', str(xml_file), '--no-cache', 'view', 'accounts'])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert 'Fiktiv' not in result.output
+
+
+def test_view_accounts_currency_column_order_is_stable(request: TopRequest) -> None:
+    """Currency columns are derived from the unstacked balance, so their order must not depend on set iteration."""
+    runner = CliRunner()
+    xml_file = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+
+    result = runner.invoke(app, [
+        '--file', str(xml_file),
+        '--output', 'csv',
+        '--no-cache',
+        'view', 'accounts'
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert result.output.splitlines()[0] == 'accountId,name,type,EUR,GBP,USD,messages'
 
 
 def test_view_securities_csv_output(request: TopRequest) -> None:

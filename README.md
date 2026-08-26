@@ -153,7 +153,7 @@ anonymization. Run `pp-terminal init` for the format.
 
 - [pipx](https://pipx.pypa.io/latest/#install-pipx) to install the application (without having to worry about different Python runtimes)
 - Portfolio Performance version >= 0.70.3
-- Portfolio Performance file must be saved as "XML with id attributes"
+- Portfolio Performance file must be available as XML (with or without ID attributes)
 
 ## Installing
 
@@ -281,7 +281,7 @@ If your command makes sense for a broader audience, I'm happy to accept a [pull 
 
 In case you are experiencing any problems:
 1. Create an [anonymized version](#export) of your portfolio (verify!) or use the [kommer sample](tests/fixtures/kommer.toml)
-2. Add the `--verbose` option to the command that is causing the issue
+2. Add the `--verbose` option (or its synonym `--debug`) to the command that is causing the issue
 3. And [submit a new issue](https://github.com/ma4nn/pp-terminal/issues/new) and include the results from steps 1. and 2.
 
 ## License

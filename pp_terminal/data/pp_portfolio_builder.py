@@ -195,9 +195,9 @@ left join xact_unit as xu on xu.xact = x.uuid and xu.type = 'GROSS_VALUE'
 
     def _get_attributes(self, entity: str) -> dict[str, Attribute]:
         cursor = self._db.connection.cursor()
-        cursor.execute("SELECT id, name, converterClass FROM attribute_type WHERE target = ? AND id NOT IN ('logo')", (entity, ))
+        cursor.execute("SELECT id, name, converterClass, columnLabel FROM attribute_type WHERE target = ? AND id NOT IN ('logo')", (entity, ))
 
-        return {str(row[0]): Attribute(uuid=str(row[0]), name=str(row[1]), converter=str(row[2])) for row in cursor.fetchall()}
+        return {str(row[0]): Attribute(uuid=str(row[0]), name=str(row[1]), converter=str(row[2]), label=str(row[3])) for row in cursor.fetchall()}
 
 
 class CachedPpPortfolioBuilder:  # pylint: disable=too-few-public-methods

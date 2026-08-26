@@ -156,7 +156,7 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
     @mcp.tool()
     def query_securities(
         date: str | None = None,
-        active_only: bool = False,
+        include_inactive: bool = False,
         in_stock_only: bool = False,
     ) -> list[dict[str, Any]]:
         """List all securities with current holdings and key metrics.
@@ -168,18 +168,19 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
 
         Args:
             date: Valuation date as ISO string (defaults to today)
-            active_only: If true, exclude retired securities
+            include_inactive: If true, also list retired securities, which are hidden by default
             in_stock_only: If true, only show securities with shares > 0
         """
         portfolio = _ensure_fresh_portfolio()
         by_date = datetime.fromisoformat(date) if date else datetime.now()
-        df = prepare_securities_df(portfolio, config, output, by_date, active_only, in_stock_only)
+        df = prepare_securities_df(portfolio, config, output, by_date, include_inactive, in_stock_only)
         return _clean_records(df)
 
     @mcp.tool()
     def query_accounts(
         date: str | None = None,
         account_type: str | None = None,
+        include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
         """List all accounts with balances and validation warnings.
 
@@ -189,11 +190,12 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         Args:
             date: Valuation date as ISO string (defaults to today)
             account_type: Filter by type: 'DEPOSIT' (= cash) or 'SECURITIES' (= portfolio)
+            include_inactive: If true, also list retired accounts, which are hidden by default
         """
         portfolio = _ensure_fresh_portfolio()
         by_date = datetime.fromisoformat(date) if date else datetime.now()
         parsed_type = AccountType[account_type] if account_type else None
-        df = prepare_accounts_df(portfolio, config, output, by_date, parsed_type)
+        df = prepare_accounts_df(portfolio, config, output, by_date, parsed_type, include_inactive)
         return _clean_records(df.reset_index())
 
     @mcp.tool()

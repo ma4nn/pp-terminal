@@ -23,18 +23,19 @@ from pathlib import Path
 from types import SimpleNamespace
 import logging
 import zlib
-from typing import Optional
+from typing import Any, Optional
 
 import click
 from rich import print # pylint: disable=redefined-builtin
 from rich.console import Console as RichConsole
 from rich.logging import RichHandler
 import typer
+from typer.core import TyperGroup
 from typing_extensions import Annotated
 from typer_config import use_config
 
 from pp_terminal.output.strategy_factory import create_strategy
-from pp_terminal.utils.config import validated_config_callback, get_config
+from pp_terminal.utils.config import validated_config_callback, get_config, get_config_path
 from pp_terminal.exceptions import InputError
 from pp_terminal.utils.helper import set_precision
 from pp_terminal.output.strategy import OutputFormat
@@ -44,7 +45,25 @@ from pp_terminal.data.xml_anonymizer import XmlAnonymizer
 from pp_terminal.mcp_server import start_mcp
 from . import __version__
 
-app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+VERBOSE_HINT = '%s (run with --verbose for details)'
+
+
+class ErrorHandlingGroup(TyperGroup):
+    """Commands raise InputError once the main callback has returned, out of reach of its own handler."""
+
+    def invoke(self, ctx: Any) -> Any:  # typer vendors its own click, so the Context type is not click's
+        try:
+            return super().invoke(ctx)
+        except InputError as e:
+            # read the flag from the parsed parameters, ctx.obj is unset when the callback itself failed
+            if ctx.params.get('verbose'):
+                raise
+
+            log.critical(VERBOSE_HINT, e)
+            raise typer.Abort() from e
+
+
+app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich", cls=ErrorHandlingGroup)
 app.add_typer(typer.Typer(no_args_is_help=True), name="simulate", help="Run simulations on the portfolio data, like share sells or German Vorabpauschale.")
 app.add_typer(typer.Typer(no_args_is_help=True), name="view", help="View details about portfolio entities like accounts or securities.")
 
@@ -111,7 +130,7 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Optional[bool],
             typer.Option("--version", callback=version_callback, is_eager=True),  # declared the option name to avoid --no-version
         ] = None,
-        verbose: Annotated[Optional[bool], typer.Option('--verbose', help='Enable verbose logging.')] = None,
+        verbose: Annotated[Optional[bool], typer.Option('--verbose', '--debug', help='Enable verbose logging.')] = None,
 ) -> None:
 
     # commands like "init" bootstrap a config and thus need neither a file nor a portfolio
@@ -122,8 +141,13 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         logging.basicConfig(force=True, level=logging.DEBUG, format="%(message)s", datefmt="[%X]",
                             handlers=[RichHandler(rich_tracebacks=True, show_time=False, console=RichConsole(stderr=True))])
 
+    if config_path := get_config_path():
+        log.debug('Loaded config from file "%s"', config_path)
+
     if file is None:
         raise click.BadParameter("no Portfolio Performance file given, pass --file or set 'file' in your config", param_hint="'--file'")
+
+    log.debug('Using Portfolio Performance file "%s"', file)
 
     set_precision(precision)
     should_anonymize = anonymize or get_config().anonymize is not None
@@ -146,7 +170,7 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         if verbose:
             raise e
 
-        log.critical(e)
+        log.critical(VERBOSE_HINT, e)
         raise typer.Abort()
 
 

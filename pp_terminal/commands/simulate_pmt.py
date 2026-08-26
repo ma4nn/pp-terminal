@@ -21,7 +21,7 @@ from datetime import datetime, date as DateType
 import logging
 import math
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from typing_extensions import Annotated
 
 import click
@@ -39,7 +39,7 @@ from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import Money, Percent, TaxPaidSchema
 from pp_terminal.exceptions import InputError
 from pp_terminal.output.strategy import OutputStrategy, Console
-from pp_terminal.output.table_decorator import TableOptions
+from pp_terminal.output.table_decorator import TableOptions, format_value
 from pp_terminal.utils.config import Config, ConfigModel, command_config
 from pp_terminal.utils.helper import footer
 from pp_terminal.utils.options import tax_rate_callback, allowance_callback
@@ -53,7 +53,10 @@ class PmtConfig(ConfigModel):
     returns: list[Annotated[float, Field(ge=0, le=100)] | dict[str, Annotated[float, Field(ge=0, le=100)]]] | None = None
     end_date: DateType | None = None
 
-_RESULT_COLUMNS = ['assumedReturn', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate']
+_RESULT_COLUMNS = ['assumedReturn', 'startCapital', 'currency', 'grossPerYear', 'grossRate', 'netPerYear', 'netPerMonth', 'netRate']
+
+# Money and Percent are both plain floats, so the currency column would otherwise put a symbol on the rates too
+_PERCENT_COLUMNS = frozenset({'assumedReturn', 'grossRate', 'netRate'})
 
 # reserved key in a per-category returns table that sets the rate for every category not listed explicitly
 DEFAULT_RETURN_KEY = '*'
@@ -128,13 +131,24 @@ def _account_categories(portfolio: Portfolio, balances: pd.Series, taxonomy: str
     return categories
 
 
-def _active_account_balances(snapshot: PortfolioSnapshot) -> pd.Series:
-    """Deposit-account balances excluding retired accounts, which no longer back a withdrawal."""
-    balances = snapshot.balances
-    retired = retired_row_labels(snapshot.portfolio.deposit_accounts)
+def _exclude_retired_accounts(series: pd.Series, accounts: pd.DataFrame) -> pd.Series:
+    """Drops the rows held in a retired account, which no longer backs a withdrawal."""
+    retired = retired_row_labels(accounts)
     if not retired:
-        return balances
-    return balances[~balances.index.get_level_values('accountId').isin(retired)]
+        return series
+    return series[~series.index.get_level_values('accountId').isin(retired)]
+
+
+def _active_account_balances(snapshot: PortfolioSnapshot) -> pd.Series:
+    return _exclude_retired_accounts(snapshot.balances, snapshot.portfolio.deposit_accounts)
+
+
+def _active_holdings(snapshot: PortfolioSnapshot) -> pd.Series:
+    return _exclude_retired_accounts(snapshot.shares, snapshot.portfolio.securities_accounts)
+
+
+def _active_security_values(snapshot: PortfolioSnapshot) -> pd.Series:
+    return _exclude_retired_accounts(snapshot.values, snapshot.portfolio.securities_accounts)
 
 
 def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonomy: str, returns_by_category: dict[str, float]) -> Percent:
@@ -143,7 +157,7 @@ def blended_return_from_allocation(portfolio: Portfolio, date: datetime, taxonom
     '*' default (if set), and items unclassified in the taxonomy weigh in at 0%."""
     default_return, category_overrides = split_return_scenario(returns_by_category)
     snapshot = PortfolioSnapshot(portfolio, date)
-    security_values = snapshot.values.groupby('securityId').sum()
+    security_values = _active_security_values(snapshot).groupby('securityId').sum()
     account_values = _active_account_balances(snapshot).groupby('accountId').sum()
 
     total = security_values.sum() + account_values.sum()
@@ -184,8 +198,8 @@ def _taxable_position(
         exempt_rate: Percent,
         tax_csv_data: DataFrame[TaxPaidSchema] | None
 ) -> tuple[Money, Money]:
-    """Market value of all held securities and their taxable gain if sold today at the current FIFO frontier."""
-    holdings = snapshot.shares
+    """Market value of the securities held in active accounts and their taxable gain if sold today at the current FIFO frontier."""
+    holdings = _active_holdings(snapshot)
     if holdings.empty:
         return Money(0), Money(0)
 
@@ -242,14 +256,22 @@ def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positiona
         net = gross - tax
         rows.append({
             'assumedReturn': Percent(assumed_return),
+            'currency': portfolio.base_currency,
             'grossPerYear': Money(gross),
             'grossRate': Percent(gross / start_capital * 100),
             'netPerYear': Money(net),
             'netPerMonth': Money(net / 12),
             'netRate': Percent(net / start_capital * 100),
+            'startCapital': Money(start_capital),  # constant per run, but the only way it reaches csv/json output
         })
 
     return pd.DataFrame(rows)[_RESULT_COLUMNS]
+
+
+def _format_value(value: Any, column_name: str, row: pd.Series) -> str:
+    if column_name in _PERCENT_COLUMNS:
+        return format_value(value, column_name, row.drop('currency', errors='ignore'))
+    return format_value(value, column_name, row)
 
 
 def _next_step_hint(gross: Money | None, cash: Money, gross_rate: Percent | None) -> str:
@@ -325,15 +347,14 @@ def simulate_pmt(  # pylint: disable=too-many-arguments,too-many-positional-argu
         f'by {end_date.strftime("%Y-%m-%d")} ({round(_horizon_years(date, end_date) * 12)} months left) at {rate_clause} '
         f'The [bold]net[/bold] amount is what is left to spend after an [bold]estimated[/bold] German tax on the drawn gain '
         f'(up to {allowance:.2f} Sparerpauschbetrag applied). All amounts are in today\'s purchasing power.\n'
-        '[dim]Restrictions: the tax (and hence net) is approximate — it applies the portfolio\'s average embedded gain '
-        'uniformly, whereas a real sale realizes specific lots (the least-taxed first), so a given year\'s actual tax is '
-        'usually lower. Run [cyan]simulate share-sell[/cyan] for the exact per-security figure, matching this row\'s gross '
+        '[dim]Restrictions: the tax (and hence net) is approximate — run [cyan]simulate share-sell[/cyan] for the exact per-security figure, matching this row\'s gross '
         'with [cyan]--target-gross[/cyan] (or its net with [cyan]--target-net[/cyan]). Cash is included at par; future '
         'Vorabpauschale and the nominal taxation of real gains are not modeled.[/dim]'
     ))
     console.print(*output.result_table(
         result,
-        TableOptions(title=f"Amortization Withdrawal on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=False)
+        TableOptions(title=f"Amortization Withdrawal on {date.strftime('%Y-%m-%d')}", show_index=False, show_total=False,
+                     value_formatter=_format_value)
     ))
 
     cash = Money(_active_account_balances(PortfolioSnapshot(portfolio, date)).sum())

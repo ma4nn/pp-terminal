@@ -58,7 +58,7 @@ def normalize_columns(
             # Add attribute columns with their friendly names
             if attributes:
                 for uuid, attr in sorted(attributes.items(), key=lambda x: x[1].name):
-                    available_names.append(f"{uuid} ({attr.name})")
+                    available_names.append(f"{uuid} ({attr.column})")
             raise InputError(f"Column '{col}' not found. Available columns: {', '.join(available_names)}")
 
     return list(dict.fromkeys(normalized))  # make unique

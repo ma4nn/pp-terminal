@@ -64,11 +64,12 @@ pp-terminal mcp
 
 ### Inspect Portfolio
 
-| Command           | Description                                                                            |
-|-------------------|----------------------------------------------------------------------------------------|
-| `view accounts`   | Get detailed information about the balances per each deposit and/or securities account |
-| `view securities` | Get detailed information about the securities                                          |
-| `view taxonomies` | Get detailed information about the taxonomies                                          |
+| Command            | Description                                                                            |
+|--------------------|----------------------------------------------------------------------------------------|
+| `view accounts`    | Get detailed information about the balances per each deposit and/or securities account |
+| `view cash-flows`  | Get the cumulative deposits, withdrawals and net contributions per currency            |
+| `view securities`  | Get detailed information about the securities                                          |
+| `view taxonomies`  | Get detailed information about the taxonomies                                          |
 
 The displayed columns are configurable via `[commands.view.accounts]` / `[commands.view.securities]` in the
 [configuration file](#configuration-file) — run `pp-terminal init` for the field reference, and call a command with

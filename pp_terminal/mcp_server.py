@@ -30,6 +30,7 @@ from mcp.server.fastmcp import FastMCP
 
 from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df, summarize_sell_plan
 from pp_terminal.commands.view_accounts import prepare_accounts_df
+from pp_terminal.commands.view_cash_flows import prepare_cash_flows_df, resolve_deposit_account
 from pp_terminal.commands.view_securities import prepare_securities_df
 from pp_terminal.commands.view_taxonomies import prepare_taxonomies_df
 from pp_terminal.data.filters import clean_for_display
@@ -55,6 +56,7 @@ Workflow:
 Tool selection guide:
 - "Show my holdings" / "What securities do I have?" → query_securities
 - "Show my accounts" / "What is my cash balance?" → query_accounts
+- "How much have I deposited?" / "What are my net contributions?" → query_cash_flows
 - "What taxonomies exist?" / "Show asset allocation categories" → portfolio://taxonomies resource
 - "What if I sell everything?" / "Total tax on my portfolio?" → simulate_sell_all
 - "I need X EUR after tax" / "Sell to get X net" / "Minimize taxes for X amount" → simulate_sell_target_net
@@ -193,6 +195,45 @@ def create_mcp_server(file_path: Path, config: Config) -> FastMCP:  # pylint: di
         parsed_type = AccountType[account_type] if account_type else None
         df = prepare_accounts_df(portfolio, config, output, by_date, parsed_type)
         return _clean_records(df.reset_index())
+
+    @mcp.tool()
+    def query_cash_flows(
+        date: str | None = None,
+        account_id: str | None = None,
+        include_transfers: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Calculate cumulative deposits, withdrawals, and net contributions.
+
+        Each row is one currency showing: currency, totalDeposits, totalWithdrawals,
+        netContributions (totalDeposits - totalWithdrawals), and transactionCount.
+        Results are grouped by currency because amounts in different currencies
+        must not be added together. Deposits and withdrawals include all
+        transactions from the beginning of the file through the requested date.
+        Internal transfers are excluded by default.
+
+        totalWithdrawals is reported as a positive number, so netContributions is
+        negative once withdrawals exceed deposits. transactionCount counts deposits
+        and withdrawals together, not deposits alone.
+
+        Only cash movements on deposit accounts are counted. Securities delivered
+        into or out of the portfolio in kind (DELIVERY_INBOUND / DELIVERY_OUTBOUND,
+        e.g. a transfer from another broker) never touch a deposit account and are
+        therefore not part of netContributions.
+
+        Args:
+            date: Include transactions through this ISO date (defaults to today).
+            account_id: Restrict the result to one deposit account, given as its
+                accountId or its name. Raises an error if it matches no account.
+            include_transfers: Include TRANSFER_IN and TRANSFER_OUT transactions,
+                i.e. cash moved between two of your own deposit accounts. These
+                net to zero across the whole portfolio, so enable this only
+                together with account_id.
+        """
+        portfolio = _ensure_fresh_portfolio()
+        by_date = datetime.fromisoformat(date) if date else datetime.now()
+        resolved_account_id = resolve_deposit_account(portfolio, account_id) if account_id else None
+        df = prepare_cash_flows_df(portfolio, by_date, resolved_account_id, include_transfers)
+        return _clean_records(df)
 
     @mcp.tool()
     def simulate_vap(

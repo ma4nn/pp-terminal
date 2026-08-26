@@ -554,3 +554,28 @@ def test_view_accounts_json_output(request: TopRequest) -> None:
     expected_rows = json.loads(Path(golden_file).read_text(encoding='utf-8'))
 
     assert actual_rows == expected_rows
+
+
+def test_simulate_interest_json_output_is_parseable(request: TopRequest) -> None:
+    """A console without soft wrapping folds the payload at the terminal width, injecting newlines into the JSON."""
+    runner = CliRunner()
+    fixtures_dir = request.path.parent.parent / 'fixtures'
+
+    result = runner.invoke(app, [
+        '--file', str(fixtures_dir / 'kommer.ids.xml'),
+        '--output', 'json',
+        '--no-cache',
+        'simulate', 'interest',
+        '--interest-rate', '2',
+        '--year', '2024'
+    ])
+
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
+    assert json.loads(result.stdout) == [{
+        'name': 'Wertpapierkonto',
+        'currency': 'EUR',
+        'meanBalance': 572.8546212121,
+        'interestRate': '2.0%',
+        'simulatedInterest': 4.2063464864,
+        'actualInterest': None,
+    }]

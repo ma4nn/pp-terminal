@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.1] - 2026-08-26
 
 ### Added
 
@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--debug` as a synonym for `--verbose`
 - Debug logging of the config and Portfolio Performance file paths actually used
 - `view accounts --inactive` and `view securities --inactive` to also list retired (inactive) entries
+- `view cash-flows` and the `query_cash_flows` MCP tool for deposits, withdrawals and net contributions per currency
 
 ### Changed
 
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (e.g. `TER` instead of `Gesamtkostenquote (TER)`), which is also what `--fields` now matches
 - `view accounts` and `view securities` hide retired entries unless `--inactive` is passed;
   `view securities --active` is gone, as is the `active_only` argument of the `query_securities` MCP tool
+- `simulate interest` json/csv keys are camelCase now: `meanBalance`, `simulatedInterest`, `actualInterest`
 
 ### Fixed
 

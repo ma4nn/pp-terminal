@@ -24,7 +24,7 @@ dynamic = ["version"]
 
 
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27,<2", "hatch-vcs>=0.4,<1"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]

@@ -75,6 +75,9 @@ jobs:
         name: python-package-distributions
         path: dist/
 
+    - name: Check Package Metadata
+      run: uvx twine check --strict dist/*
+
     - name: Install and smoke-test the built wheel
       env:
         RELEASE_TAG: ${{ github.event.release.tag_name }}

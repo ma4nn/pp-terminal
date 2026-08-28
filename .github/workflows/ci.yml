@@ -68,24 +68,24 @@ jobs:
     - name: Build Package
       run: make build
 
-    - name: Install and smoke-test the built wheel
-      env:
-        RELEASE_TAG: ${{ github.event.release.tag_name }}
-      run: |
-        uv venv /tmp/wheel-test
-        uv export --frozen --no-dev --no-emit-project -o /tmp/wheel-test-requirements.txt
-        uv pip install --no-build --python /tmp/wheel-test/bin/python -r /tmp/wheel-test-requirements.txt
-        uv pip install --no-build --no-deps --python /tmp/wheel-test/bin/python dist/*.whl
-        /tmp/wheel-test/bin/pp-terminal --version
-        if [ -n "$RELEASE_TAG" ]; then
-          /tmp/wheel-test/bin/pp-terminal --version | grep -qxF "pp-terminal version: ${RELEASE_TAG#v}"
-        fi
-
+    # upload before the smoke test so code executed by the install cannot alter the published artifact
     - name: Upload Package
       uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions
         path: dist/
+
+    - name: Install and smoke-test the built wheel
+      env:
+        RELEASE_TAG: ${{ github.event.release.tag_name }}
+      run: |
+        uv venv /tmp/wheel-test
+        VIRTUAL_ENV=/tmp/wheel-test uv sync --locked --no-dev --no-install-project --active
+        uv pip install --no-build --no-deps --python /tmp/wheel-test/bin/python dist/*.whl
+        /tmp/wheel-test/bin/pp-terminal --version
+        if [ -n "$RELEASE_TAG" ]; then
+          /tmp/wheel-test/bin/pp-terminal --version | grep -qxF "pp-terminal version: ${RELEASE_TAG#v}"
+        fi
 
   publish-to-testpypi:
     name: Publish to TestPyPI

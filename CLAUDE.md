@@ -62,6 +62,7 @@ Additional top-level modules (e.g. an MCP server) may live alongside `main.py`; 
 ```bash
 make                    # Full build: install, check, test, build
 make install            # Install dependencies via uv and apply ppxml2db patch
+make build              # Install dependencies, then build the distribution (no checks/tests)
 make clean              # Remove build artifacts
 ```
 

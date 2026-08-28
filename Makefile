@@ -1,5 +1,7 @@
-.DEFAULT_GOAL := build
+.DEFAULT_GOAL := all
 CHECK_DIRS = pp_terminal tests
+
+all: install check test build
 
 clean:
 	rm -rf dist __pycache__ *.pyc *.pyo
@@ -21,7 +23,7 @@ test:
 test-mutations:
 	uv run mutmut run; status=$$?; uv run mutmut results; exit $$status
 
-build: install check test
+build: install
 	uv build
 
 inspect-mcp:

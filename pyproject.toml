@@ -34,13 +34,13 @@ raw-options = { local_scheme = "no-local-version" }
 [tool.hatch.build.targets.wheel]
 # hatchling >=1.32 defaults to metadata 2.5, which twine in gh-action-pypi-publish rejects (packaging <26.1)
 core-metadata-version = "2.4"
-include = ["pp_terminal", "ppxml2db"]
+include = ["/pp_terminal", "/ppxml2db"]
 exclude = ["ppxml2db/.git", "ppxml2db/Makefile", "ppxml2db/README.md", "**/__pycache__"]
 dev-mode-dirs = ["."]
 
 [tool.hatch.build.targets.sdist]
 core-metadata-version = "2.4"
-include = ["pp_terminal", "ppxml2db"]
+include = ["/pp_terminal", "/ppxml2db"]
 exclude = ["ppxml2db/.git", "ppxml2db/__pycache__"]
 
 [dependency-groups]

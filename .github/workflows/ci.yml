@@ -79,13 +79,19 @@ jobs:
       env:
         RELEASE_TAG: ${{ github.event.release.tag_name }}
       run: |
+        set -o pipefail
         uv venv /tmp/wheel-test
         VIRTUAL_ENV=/tmp/wheel-test uv sync --locked --no-dev --no-install-project --active
         uv pip install --no-build --no-deps --python /tmp/wheel-test/bin/python dist/*.whl
-        /tmp/wheel-test/bin/pp-terminal --version
+        PP=/tmp/wheel-test/bin/pp-terminal
+        $PP --version
         if [ -n "$RELEASE_TAG" ]; then
-          /tmp/wheel-test/bin/pp-terminal --version | grep -qxF "pp-terminal version: ${RELEASE_TAG#v}"
+          $PP --version | grep -qxF "pp-terminal version: ${RELEASE_TAG#v}"
         fi
+        # both XStream reference flavors, to exercise the packaged ppxml2db end-to-end
+        for xml in tests/fixtures/kommer.ids.xml tests/fixtures/kommer.xml; do
+          $PP --file "$xml" --output json --no-cache view accounts | jq -e 'length > 0' > /dev/null
+        done
 
   publish-to-testpypi:
     name: Publish to TestPyPI

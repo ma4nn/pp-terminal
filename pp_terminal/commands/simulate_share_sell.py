@@ -29,7 +29,7 @@ from pandera.typing import DataFrame
 from pydantic import Field
 
 from pp_terminal.data.filters import filter_by_security, filter_by_account
-from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots, finalize_sell_lots
+from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots_per_security, finalize_sell_lots
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.sell_strategy import (
     SellStrategy, FixedSharesStrategy, MinTaxStrategy, TargetGrossStrategy, AllocationPreservingStrategy
@@ -112,6 +112,13 @@ def _validate_sell_arguments(
         raise InputError("a minimum amount requires preserve-allocation (a taxonomy)")
 
 
+def _sale_prices(security_ids: list[str], latest_prices: pd.Series, price: Money | None) -> pd.Series:
+    """One sale price per security: the explicit override if given, each security's latest price otherwise."""
+    if price:
+        return pd.Series(price, index=security_ids, dtype='float64')
+    return latest_prices.reindex(security_ids)
+
+
 def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         portfolio: Portfolio,
         config: Config,
@@ -154,19 +161,12 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
         raise InputError(f"No price data for: {', '.join(missing_prices)}")
 
     exempt_rate = Percent(config.tax.exemption_rate)
-    all_enriched = []
-    for sec_id in security_ids:
-        transactions = all_transactions.pipe(filter_by_security, security_id=sec_id)
-        sale_price = price if price else latest_prices.loc[sec_id]
-        sell_ctx = SellContext(snapshot.date, sale_price, tax_rate, exempt_rate, tax_csv_data)
-        enriched = enrich_fifo_lots(transactions, sell_ctx)
-        if not enriched.empty:
-            all_enriched.append(enriched)
-
-    if not all_enriched:
+    result = enrich_fifo_lots_per_security(all_transactions, {
+        sec_id: SellContext(snapshot.date, sale_price, tax_rate, exempt_rate, tax_csv_data)
+        for sec_id, sale_price in _sale_prices(security_ids, latest_prices, price).items()
+    })
+    if result.empty:
         return pd.DataFrame()
-
-    result = pd.concat(all_enriched)
 
     # enrichment spans all accounts to resolve transfers; keep only lots residing in the requested account
     if account_id:

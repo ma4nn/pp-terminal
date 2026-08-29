@@ -23,7 +23,7 @@ import logging
 import pandas as pd
 from pydantic import Field
 
-from pp_terminal.data.filters import filter_by_security
+from pp_terminal.data.filters import filter_by_security, filter_by_type
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
@@ -216,15 +216,11 @@ class UnlinkedDepotTransferRule(ValidationRule):
 
     @classmethod
     def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: Config) -> dict[str, Any]:
-        transactions = portfolio.securities_account_transactions
-        transfer_outs = transactions[transactions['type'] == TransactionType.TRANSFER_OUT.name]
-        if 'transferTargetAccount' not in transfer_outs.columns:
-            transfer_outs = transfer_outs.iloc[0:0]  # column absent: cannot assess (e.g. legacy/hand-built frames)
-        else:
-            target = transfer_outs['transferTargetAccount']
-            transfer_outs = transfer_outs[target.isna() | (target.fillna('').astype(str).str.strip() == '')]
+        transfer_outs = portfolio.securities_account_transactions.pipe(filter_by_type, transaction_types=TransactionType.TRANSFER_OUT)
+        target = transfer_outs.get('transferTargetAccount')  # optional in the schema, so absent on hand-built frames
+        unlinked = transfer_outs.iloc[0:0] if target is None else transfer_outs[target.fillna('').astype(str).str.strip() == '']
         return {
-            'unlinked_transfers': transfer_outs,
+            'unlinked_transfers': unlinked,
             'account_names': portfolio.securities_accounts['name'],
         }
 

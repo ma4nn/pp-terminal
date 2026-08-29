@@ -30,10 +30,10 @@ import typer
 from pandera.typing import DataFrame
 from pydantic import Field
 
-from pp_terminal.data.filters import filter_by_security, retired_row_labels
+from pp_terminal.data.filters import retired_row_labels
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.allocation import build_category_map
-from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots
+from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots_per_security
 from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import Money, Percent, TaxPaidSchema
@@ -210,12 +210,10 @@ def _taxable_position(
     if missing_prices:
         raise InputError(f"No price data for: {', '.join(missing_prices)}")
 
-    all_transactions = snapshot.securities_account_transactions  # kept across all accounts so cost_basis can relocate transferred lots
-    lots = pd.concat([
-        enrich_fifo_lots(all_transactions.pipe(filter_by_security, security_id=security_id),
-                         SellContext(snapshot.date, latest_prices.loc[security_id], tax_rate, exempt_rate, tax_csv_data))
+    lots = enrich_fifo_lots_per_security(snapshot.securities_account_transactions, {
+        security_id: SellContext(snapshot.date, latest_prices.loc[security_id], tax_rate, exempt_rate, tax_csv_data)
         for security_id in holdings.index.get_level_values('securityId').unique()
-    ])
+    })
     lots = _exclude_retired_accounts(lots, snapshot.portfolio.securities_accounts)
 
     return Money(lots['grossProceeds'].sum()), Money(lots['taxableGain'].sum())

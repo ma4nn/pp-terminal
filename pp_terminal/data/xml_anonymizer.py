@@ -39,6 +39,14 @@ class XmlAnonymizer:  # pylint: disable=too-many-instance-attributes,too-few-pub
         'isRetired', 'updatedAt', 'version', 'baseCurrency'
     }
 
+    # Both legs of a cross entry (a buy/sell pair, a depot transfer) must keep booking the same amount
+    # and share count, and PP serializes them under differing tags — so they all share one factor.
+    TRANSACTION_TAGS = {
+        'portfolio-transaction', 'account-transaction',
+        'portfolioTransaction', 'accountTransaction',
+        'transactionFrom', 'transactionTo',
+    }
+
     def __init__(
         self,
         seed: int,
@@ -171,7 +179,8 @@ class XmlAnonymizer:  # pylint: disable=too-many-instance-attributes,too-few-pub
         try:
             # Build context key for consistency
             parent = element.getparent()
-            context = f"{element.tag}_{parent.tag if parent is not None else ''}"
+            parent_tag = parent.tag if parent is not None else ''
+            context = f"{element.tag}_{'transaction' if parent_tag in self.TRANSACTION_TAGS else parent_tag}"
 
             # Get or generate factor
             if context not in self.amount_factors:

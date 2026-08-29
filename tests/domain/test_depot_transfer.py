@@ -28,15 +28,18 @@ from _pytest.logging import LogCaptureFixture
 from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df
 from pp_terminal.domain.cost_basis import SellContext, calculate_total_cost_basis, enrich_fifo_lots
 from pp_terminal.domain.portfolio import Portfolio
+from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType, TransactionType, TaxPaidSchema
 from pp_terminal.utils.config import empty_config
 
 TAX_RATE = 26.375
 SELL_DATE = datetime(2024, 12, 31)
 
-# transferTargetAccount carries Portfolio Performance's authoritative cross-entry link: the destination
-# securities account of a TRANSFER_OUT. It is None for every other transaction type.
-_TRANSACTION_COLUMNS = ['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees', 'transferTargetAccount']
+# transferTargetAccount and transferTargetShares carry Portfolio Performance's authoritative cross-entry
+# link: destination securities account and share count of a TRANSFER_OUT's incoming leg. Both are None
+# for every other transaction type; rows may omit the trailing share count, which then defaults to the
+# outgoing leg (as Portfolio Performance always books it).
+_TRANSACTION_COLUMNS = ['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees', 'transferTargetAccount', 'transferTargetShares']
 
 
 def build_portfolio(
@@ -62,7 +65,8 @@ def build_portfolio(
             [SELL_DATE, 'sec1', 160.0],
         ], columns=['date', 'securityId', 'price']).set_index(['date', 'securityId'])
 
-    transactions = pd.DataFrame(transaction_rows, columns=_TRANSACTION_COLUMNS)
+    rows = [[*row, *[None] * (len(_TRANSACTION_COLUMNS) - len(row))] for row in transaction_rows]
+    transactions = pd.DataFrame(rows, columns=_TRANSACTION_COLUMNS)
     transactions = transactions.set_index(['date', 'accountId', 'securityId'])
 
     portfolio = Portfolio(accounts, transactions, securities, prices)
@@ -225,6 +229,63 @@ def test_transfer_out_without_cross_entry_link_keeps_lots_in_source(target: str 
     assert len(lots) == 1
     assert lots.iloc[0]['accountId'] == 'depot1'
     assert lots.iloc[0]['shares'] == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize('shares_in', [0.0, -5.0])
+def test_transfer_whose_incoming_leg_books_nothing_consumes_the_lots(shares_in: float, caplog: LogCaptureFixture) -> None:
+    """An incoming leg crediting no shares says the shares left the portfolio, and Portfolio Performance's own
+    balances say so too — so the lots go with them. Keeping them anywhere would leave a cost basis for shares
+    nobody holds."""
+    portfolio = build_portfolio([
+        [datetime(2020, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None, None],
+        [datetime(2020, 6, 1), 'depot2', 'sec1', TransactionType.BUY.value, -750.0, 5.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None, None],
+        [datetime(2023, 1, 15), 'depot1', 'sec1', TransactionType.TRANSFER_OUT.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, 'depot2', shares_in],
+        [datetime(2023, 1, 15), 'depot2', 'sec1', TransactionType.TRANSFER_IN.value, 0.0, max(shares_in, 0.0), AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None, None],
+    ])
+
+    with caplog.at_level(logging.WARNING):
+        lots = remaining_lots(portfolio).set_index('accountId')
+
+    assert 'the cost basis follows the incoming leg' in caplog.text
+    balances = PortfolioSnapshot(portfolio, SELL_DATE).share_balances
+    assert 'depot1' not in lots.index  # emptied by the transfer, so it holds no lot either
+    assert lots.loc['depot2', 'shares'] == pytest.approx(balances.loc[('depot2', 'sec1', 'EUR')])
+    assert calculate_total_cost_basis(portfolio.securities_account_transactions) == pytest.approx(750.0)  # only depot2's own purchase remains
+
+
+def test_transfer_out_of_no_shares_is_a_no_op() -> None:
+    """A TRANSFER_OUT booking nothing moves nothing — and must not divide by its own zero share count."""
+    portfolio = build_portfolio([
+        [datetime(2020, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None, None],
+        [datetime(2023, 1, 15), 'depot1', 'sec1', TransactionType.TRANSFER_OUT.value, 0.0, 0.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, 'depot2', 5.0],
+    ])
+
+    lots = remaining_lots(portfolio)
+
+    assert len(lots) == 1
+    assert lots.iloc[0]['accountId'] == 'depot1'
+    assert lots.iloc[0]['shares'] == pytest.approx(10.0)
+
+
+def test_transfer_with_disagreeing_legs_sizes_destination_after_incoming_leg(caplog: LogCaptureFixture) -> None:
+    """Portfolio Performance books both legs of a transfer with the same share count. Where a file disagrees,
+    the destination lots must follow the incoming leg, since that is what its share balance is credited with —
+    otherwise the position holds shares no lot accounts for and drops out of every cost-basis report."""
+    portfolio = build_portfolio([
+        [datetime(2020, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 10.0, None, None],
+        [datetime(2023, 1, 15), 'depot1', 'sec1', TransactionType.TRANSFER_OUT.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, 'depot2', 25.0],
+        [datetime(2023, 1, 15), 'depot2', 'sec1', TransactionType.TRANSFER_IN.value, 0.0, 25.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None, None],
+    ])
+
+    with caplog.at_level(logging.WARNING):
+        lots = remaining_lots(portfolio)
+
+    assert 'the cost basis follows the incoming leg' in caplog.text
+    assert len(lots) == 1
+    assert lots.iloc[0]['accountId'] == 'depot2'
+    assert lots.iloc[0]['shares'] == pytest.approx(PortfolioSnapshot(portfolio, SELL_DATE).share_balances.loc[('depot2', 'sec1', 'EUR')])
+    assert lots.iloc[0]['purchasePrice'] == pytest.approx(40.0)  # the 1000 paid now spread over 25 shares
+    assert calculate_total_cost_basis(portfolio.securities_account_transactions) == pytest.approx(1010.0)  # unchanged by the move
 
 
 def test_share_sell_account_filter_excludes_other_accounts() -> None:

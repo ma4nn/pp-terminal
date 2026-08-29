@@ -311,7 +311,9 @@ def test_transfer_target_account_from_cross_entry(request: TopRequest) -> None: 
     transfer_out = transactions[transactions['type'] == TransactionType.TRANSFER_OUT.value]
     assert len(transfer_out) == 1
     assert transfer_out.iloc[0]['transferTargetAccount'] == 'depot2'
+    assert transfer_out.iloc[0]['transferTargetShares'] == pytest.approx(10.0)  # incoming leg, unscaled
 
     # non-transfer rows carry no destination link
     buy = transactions[transactions['type'] == TransactionType.BUY.value]
     assert pd.isna(buy.iloc[0]['transferTargetAccount'])
+    assert pd.isna(buy.iloc[0]['transferTargetShares'])

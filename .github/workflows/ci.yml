@@ -76,7 +76,7 @@ jobs:
         path: dist/
 
     - name: Check Package Metadata
-      run: uvx twine check --strict dist/*
+      run: uvx --no-build twine@7.0.0 check --strict dist/*
 
     - name: Install and smoke-test the built wheel
       env:
@@ -84,7 +84,7 @@ jobs:
       run: |
         set -o pipefail
         uv venv /tmp/wheel-test
-        VIRTUAL_ENV=/tmp/wheel-test uv sync --locked --no-dev --no-install-project --active
+        VIRTUAL_ENV=/tmp/wheel-test uv sync --locked --no-dev --no-install-project --active --no-build
         uv pip install --no-build --no-deps --python /tmp/wheel-test/bin/python dist/*.whl
         PP=/tmp/wheel-test/bin/pp-terminal
         $PP --version

@@ -89,6 +89,8 @@ class TransactionSchema(_CoercingSchema):
     taxes: Series[Money] = pa.Field(default=0.0)
     fees: Optional[Series[Money]] = pa.Field(default=0.0, coerce=True)
     currency: Series[str] = pa.Field(nullable=True)
+    transferTargetAccount: Optional[Series[str]] = pa.Field(nullable=True)  # destination securities account of a TRANSFER_OUT (from PP's cross-entry link)
+    transferTargetShares: Optional[Series[float]] = pa.Field(nullable=True)  # shares booked by the paired TRANSFER_IN, normally identical to this row's shares
 
 
 class AccountSchema(_CoercingSchema):

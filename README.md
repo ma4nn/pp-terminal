@@ -126,9 +126,11 @@ value = 30
 severity = "warning"
 ```
 
-**Built-in rule:** `negative-share-balance` runs by default (severity `warning`, tolerance `0.001` shares) and flags
+**Built-in rules:** `negative-share-balance` runs by default (severity `warning`, tolerance `0.001` shares) and flags
 securities with a negative share balance in any account — a sign of missing or inconsistent transactions, since short
-positions aren't supported by Portfolio Performance. Configuring the rule yourself replaces the built-in default; set
+positions aren't supported by Portfolio Performance. `unlinked-depot-transfer` also runs by default (severity
+`warning`) and flags depot transfers whose destination account link is missing, which leaves the transferred shares'
+cost basis attributed to the source account. Configuring a rule yourself replaces the built-in default; set
 `valid-months = []` to disable it.
 
 **Temporal constraints:** every rule accepts `valid-months` (e.g. `[12, 1]`) to run only in the given calendar months —

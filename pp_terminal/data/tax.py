@@ -165,8 +165,10 @@ def calculate_prepaid_tax_per_lot(
     if lots.empty or tax_csv_data is None or tax_csv_data.empty:
         return pd.Series(0.0, index=lots.index)
 
-    # Add year columns to track original lot
+    # Track each lot by position: depot transfers can leave two lots sharing one
+    # (date, accountId, securityId) key, so that key is not a safe per-lot identity
     lots_with_years = lots.copy().reset_index()
+    lots_with_years['lotId'] = range(len(lots_with_years))
     lots_with_years['first_year'] = lots_with_years['date'].dt.year
     lots_with_years['last_year'] = current_date.year - 1
 
@@ -206,8 +208,9 @@ def calculate_prepaid_tax_per_lot(
         lot_years['shares'] * lot_years['deemed_income'] * lot_years['month_factor']
     )
 
-    # Group by original lot identity (MultiIndex columns) to sum deemed income across all years
-    per_lot_deemed_income = lot_years.groupby(['date', 'accountId', 'securityId'])['deemed_income_total'].sum()
+    # Group by the positional lot id (not the non-unique index key) to sum deemed income across all years
+    per_lot_deemed_income = lot_years.groupby('lotId')['deemed_income_total'].sum()
 
-    # Reindex to match original lots dataframe, filling missing with 0
-    return per_lot_deemed_income.reindex(lots.index, fill_value=0.0)
+    # Realign to the original lots positionally, filling lots without deemed income with 0
+    aligned = per_lot_deemed_income.reindex(range(len(lots)), fill_value=0.0)
+    return pd.Series(aligned.to_numpy(), index=lots.index)

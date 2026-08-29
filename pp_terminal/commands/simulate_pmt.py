@@ -21,7 +21,7 @@ from datetime import datetime, date as DateType
 import logging
 import math
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 from typing_extensions import Annotated
 
 import click
@@ -30,10 +30,10 @@ import typer
 from pandera.typing import DataFrame
 from pydantic import Field
 
-from pp_terminal.data.filters import filter_by_account_and_security, retired_row_labels
+from pp_terminal.data.filters import retired_row_labels
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.allocation import build_category_map
-from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots
+from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots_per_security
 from pp_terminal.domain.portfolio import Portfolio, get_security_by_id
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import Money, Percent, TaxPaidSchema
@@ -47,6 +47,8 @@ from pp_terminal.utils.options import tax_rate_callback, allowance_callback
 app = typer.Typer()
 console = Console()
 log = logging.getLogger(__name__)
+
+_AccountIndexed = TypeVar('_AccountIndexed', pd.Series, pd.DataFrame)
 
 
 class PmtConfig(ConfigModel):
@@ -131,12 +133,12 @@ def _account_categories(portfolio: Portfolio, balances: pd.Series, taxonomy: str
     return categories
 
 
-def _exclude_retired_accounts(series: pd.Series, accounts: pd.DataFrame) -> pd.Series:
+def _exclude_retired_accounts(data: _AccountIndexed, accounts: pd.DataFrame) -> _AccountIndexed:
     """Drops the rows held in a retired account, which no longer backs a withdrawal."""
     retired = retired_row_labels(accounts)
     if not retired:
-        return series
-    return series[~series.index.get_level_values('accountId').isin(retired)]
+        return data
+    return data[~data.index.get_level_values('accountId').isin(retired)]
 
 
 def _active_account_balances(snapshot: PortfolioSnapshot) -> pd.Series:
@@ -208,16 +210,13 @@ def _taxable_position(
     if missing_prices:
         raise InputError(f"No price data for: {', '.join(missing_prices)}")
 
-    market_value, taxable_gain = 0.0, 0.0
-    for (account_id, security_id, _currency), _shares in holdings.items():
-        transactions = snapshot.securities_account_transactions.pipe(
-            filter_by_account_and_security, security_id=security_id, account_id=account_id
-        )
-        lots = enrich_fifo_lots(transactions, SellContext(snapshot.date, latest_prices.loc[security_id], tax_rate, exempt_rate, tax_csv_data))
-        market_value += lots['grossProceeds'].sum()
-        taxable_gain += lots['taxableGain'].sum()
+    lots = enrich_fifo_lots_per_security(snapshot.securities_account_transactions, {
+        security_id: SellContext(snapshot.date, latest_prices.loc[security_id], tax_rate, exempt_rate, tax_csv_data)
+        for security_id in holdings.index.get_level_values('securityId').unique()
+    })
+    lots = _exclude_retired_accounts(lots, snapshot.portfolio.securities_accounts)
 
-    return Money(market_value), Money(taxable_gain)
+    return Money(lots['grossProceeds'].sum()), Money(lots['taxableGain'].sum())
 
 
 def prepare_pmt_result(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals

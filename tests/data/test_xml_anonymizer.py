@@ -576,3 +576,75 @@ def test_anonymized_fixture_loads_into_portfolio(request: pytest.FixtureRequest,
 
     assert not portfolio.securities_accounts.empty, "Anonymized file should still contain securities accounts"
     assert not portfolio.securities_account_transactions.empty, "Anonymized file should still contain transactions"
+
+
+# Portfolio Performance serializes whichever leg of a cross entry it reaches first inline and the other
+# one as a reference, so either tag of a pair can be the one carrying the figures.
+@pytest.mark.parametrize('outer_tag, inner_tag', [
+    ('portfolio-transaction', 'transactionFrom'),
+    ('portfolio-transaction', 'transactionTo'),
+    ('account-transaction', 'portfolioTransaction'),
+    ('portfolioTransaction', 'accountTransaction'),
+])
+def test_cross_entry_legs_keep_booking_the_same_amount_and_shares(outer_tag: str, inner_tag: str, tmp_path: Path) -> None:
+    """Both legs of a cross entry must stay in sync: Portfolio Performance books one share count and one
+    amount on each, and anonymizing them apart would produce a file that contradicts itself."""
+    xml_content = f"""<client id="1">
+  <portfolio id="2">
+    <name>Test</name>
+    <transactions>
+      <{outer_tag} id="3">
+        <amount>1000000</amount>
+        <crossEntry class="portfolio-transfer" id="4">
+          <{inner_tag} id="5">
+            <amount>1000000</amount>
+            <shares>2400000000</shares>
+          </{inner_tag}>
+        </crossEntry>
+        <shares>2400000000</shares>
+      </{outer_tag}>
+    </transactions>
+  </portfolio>
+</client>"""
+
+    input_file = tmp_path / "test_input.xml"
+    output_file = tmp_path / "test_output.xml"
+    input_file.write_text(xml_content)
+
+    XmlAnonymizer(seed=42, amount_factor_range=(0.5, 2.0)).anonymize_file(input_file, output_file)
+
+    tree = ET.parse(str(output_file))
+    shares = [int(element.text) for element in tree.iter('shares')]
+    amounts = [int(element.text) for element in tree.iter('amount')]
+
+    assert len(set(shares)) == 1, f"Transfer legs booked differing share counts: {shares}"
+    assert len(set(amounts)) == 1, f"Transfer legs booked differing amounts: {amounts}"
+    assert shares[0] != 2400000000, "Shares should be changed"
+
+
+def test_fixture_cross_entry_legs_stay_in_sync(request: pytest.FixtureRequest, tmp_path: Path) -> None:
+    """Every cross entry in a real Portfolio Performance file must still book one amount across both of its
+    legs after anonymization (only the securities leg of a buysell carries shares, so those cannot be paired
+    here — the synthetic transfers above cover that)."""
+    fixture = request.path.parent.parent / 'fixtures' / 'kommer.ids.xml'
+    output_file = tmp_path / "anonymized.xml"
+
+    XmlAnonymizer(seed=42).anonymize_file(fixture, output_file)
+
+    tree = ET.parse(str(output_file))
+    elements_by_id = {element.get('id'): element for element in tree.iter() if element.get('id')}
+    # spelled out rather than read from the anonymizer, so dropping a tag there cannot silently
+    # shrink what this test compares
+    leg_tags = ('portfolioTransaction', 'accountTransaction', 'transactionFrom', 'transactionTo')
+
+    compared = 0
+    for cross_entry in tree.iter('crossEntry'):
+        legs = [elements_by_id[leg.get('reference')] if leg.get('reference') else leg
+                for leg in cross_entry if leg.tag in leg_tags]
+        amounts = [leg.findtext('amount') for leg in legs if leg.findtext('amount') is not None]
+        if len(amounts) < 2:
+            continue  # the other leg is serialized as a reference outside this cross entry
+        compared += 1
+        assert len(set(amounts)) == 1, f"{cross_entry.get('class')} legs book differing amounts: {amounts}"
+
+    assert compared > 0, "Fixture should contain cross entries with both legs booking an amount"

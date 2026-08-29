@@ -27,7 +27,7 @@ from _pytest.fixtures import TopRequest
 
 from pp_terminal.exceptions import InputError
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder, CachedPpPortfolioBuilder
-from pp_terminal.data.ppxml2db_wrapper import Ppxml2dbWrapper
+from pp_terminal.data.ppxml2db_wrapper import Ppxml2dbWrapper, DB_NAME_IN_MEMORY
 from pp_terminal.domain.schemas import TransactionType
 
 EXPECTED_AMOUNT_SIGNS = {
@@ -282,3 +282,38 @@ def test_securities_percent_attributes_converted(request: TopRequest) -> None:
     for value in securities_with_exemption[exempt_attr_uuid]:
         assert isinstance(value, float), f"Exemption rate should be float, got {type(value)}"
         assert 0.0 <= value <= 1.0, f"Exemption rate should be normalized (0.0-1.0), got {value}"
+
+
+def test_transfer_target_account_from_cross_entry(request: TopRequest) -> None:  # pylint: disable=unused-argument
+    """The portfolio-transfer cross-entry link must surface as transferTargetAccount on the TRANSFER_OUT row."""
+    db = Ppxml2dbWrapper(dbname=DB_NAME_IN_MEMORY)
+    conn = db.connection
+    conn.executescript("""
+        INSERT INTO property(name, value) VALUES ('baseCurrency', 'EUR');
+        INSERT INTO account(_id, uuid, type, name, updatedAt, _xmlid, _order) VALUES
+            (1, 'depot1', 'portfolio', 'Depot 1', '2020', 1, 1),
+            (2, 'depot2', 'portfolio', 'Depot 2', '2020', 2, 2);
+        INSERT INTO security(_id, uuid, name, currency, updatedAt) VALUES
+            (1, 'sec1', 'Test ETF', 'EUR', '2020');
+        INSERT INTO xact(_id, uuid, acctype, account, date, currency, amount, security, shares, type, updatedAt, _xmlid, _order) VALUES
+            (1, 'x-buy', 'portfolio', 'depot1', '2020-01-15', 'EUR', 100000, 'sec1', 1000000000, 'BUY', '2020', 1, 1),
+            (2, 'x-out', 'portfolio', 'depot1', '2023-01-15', 'EUR', 0, 'sec1', 1000000000, 'TRANSFER_OUT', '2023', 2, 2),
+            (3, 'x-in', 'portfolio', 'depot2', '2023-01-15', 'EUR', 0, 'sec1', 1000000000, 'TRANSFER_IN', '2023', 3, 3);
+        INSERT INTO xact_cross_entry(type, from_acc, from_xact, to_acc, to_xact) VALUES
+            ('portfolio-transfer', 'depot1', 'x-out', 'depot2', 'x-in');
+    """)
+    conn.commit()
+
+    db.open = lambda _: None  # type: ignore  # DB already seeded, skip XML parsing
+    portfolio = PpPortfolioBuilder(db).construct(Path('unused.xml'))
+
+    transactions = portfolio.securities_account_transactions.reset_index()
+    transfer_out = transactions[transactions['type'] == TransactionType.TRANSFER_OUT.value]
+    assert len(transfer_out) == 1
+    assert transfer_out.iloc[0]['transferTargetAccount'] == 'depot2'
+    assert transfer_out.iloc[0]['transferTargetShares'] == pytest.approx(10.0)  # incoming leg, unscaled
+
+    # non-transfer rows carry no destination link
+    buy = transactions[transactions['type'] == TransactionType.BUY.value]
+    assert pd.isna(buy.iloc[0]['transferTargetAccount'])
+    assert pd.isna(buy.iloc[0]['transferTargetShares'])

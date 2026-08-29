@@ -351,6 +351,42 @@ def test_prepare_pmt_result_ignores_retired_cash(portfolio_with_prices: Portfoli
     assert result.iloc[0]['grossPerYear'] == pytest.approx(9000.0 * amortization_factor(0.05, _HORIZON_YEARS))
 
 
+def _transferred_depot_portfolio() -> Portfolio:
+    """10 shares bought in depot1 for 1000, then transferred in full to depot2; priced at 200 -> 2000 market value."""
+    accounts = pd.DataFrame([
+        ['Depot 1', AccountType.SECURITIES.value, None, False, 'EUR'],
+        ['Depot 2', AccountType.SECURITIES.value, None, False, 'EUR'],
+    ], columns=['name', 'type', 'referenceAccount', 'isRetired', 'currency'], index=['depot1', 'depot2'])
+    accounts.index.name = 'accountId'
+
+    columns = ['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees', 'transferTargetAccount']
+    transactions = pd.DataFrame([
+        [datetime(2020, 1, 15), 'depot1', 'sec-1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
+        [datetime(2023, 1, 15), 'depot1', 'sec-1', TransactionType.TRANSFER_OUT.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, 'depot2'],
+        [datetime(2023, 1, 15), 'depot2', 'sec-1', TransactionType.TRANSFER_IN.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
+    ], columns=columns).set_index(['date', 'accountId', 'securityId'])
+
+    securities = pd.DataFrame([['Test ETF', 'IE00B4L5Y983', 'EUR']], columns=['name', 'wkn', 'currency'], index=['sec-1'])
+    securities.index.name = 'securityId'
+    prices = pd.DataFrame([[datetime(2024, 12, 31), 'sec-1', 200.0]], columns=['date', 'securityId', 'price']).set_index(['date', 'securityId'])
+
+    return Portfolio(accounts=accounts, transactions=transactions, securities=securities, prices=prices)
+
+
+def test_prepare_pmt_result_counts_fully_transferred_position() -> None:
+    """A position whose lots all moved to another depot still backs a withdrawal: the source account is empty
+    and the destination holds only a TRANSFER_IN, so slicing the FIFO frontier per account would lose it."""
+    result = prepare_pmt_result(_transferred_depot_portfolio(), empty_config(), _DATE, _TAX_RATE, [5.0], _END_DATE, allowance=0.0)
+
+    row = result.iloc[0]
+    gross = 2000.0 * amortization_factor(0.05, _HORIZON_YEARS)
+    gain_per_euro = 1000.0 * (1 - 0.30) / 2000.0  # default 30% Teilfreistellung on the 1000 gain
+
+    assert row['startCapital'] == pytest.approx(2000.0)
+    assert row['grossPerYear'] == pytest.approx(gross)
+    assert row['netPerYear'] == pytest.approx(gross - gross * gain_per_euro * _TAX_RATE / 100)
+
+
 def test_prepare_pmt_result_negative_cash_cancels_depot(portfolio_with_prices: Portfolio) -> None:
     deposit_accounts, deposit_transactions = _deposit_account(-20000.0)
     portfolio = Portfolio(

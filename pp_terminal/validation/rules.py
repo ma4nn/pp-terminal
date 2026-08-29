@@ -23,10 +23,11 @@ import logging
 import pandas as pd
 from pydantic import Field
 
-from pp_terminal.data.filters import filter_by_security
+from pp_terminal.data.filters import filter_by_security, filter_by_type
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
+from pp_terminal.domain.schemas import TransactionType
 from pp_terminal.utils.config import Config, ConfigModel, UUIDStr
 from pp_terminal.validation.base import ValidationRule
 from pp_terminal.validation.vap_liquidity_rule import VapLiquidityRule
@@ -47,7 +48,7 @@ class AccountRuleConfig(_RuleConfig):
 
 
 class SecurityRuleConfig(_RuleConfig):
-    type: Literal['price-staleness', 'price-limit', 'price-limit-from-attribute', 'cost-basis-limit', 'cost-basis-limit-from-attribute', 'paid-tax-validation', 'negative-share-balance']
+    type: Literal['price-staleness', 'price-limit', 'price-limit-from-attribute', 'cost-basis-limit', 'cost-basis-limit-from-attribute', 'paid-tax-validation', 'negative-share-balance', 'unlinked-depot-transfer']
     tolerance: float = Field(0.0, ge=0)
 
 
@@ -207,10 +208,46 @@ class NegativeShareBalanceRule(ValidationRule):
         return self.is_error(), message
 
 
+class UnlinkedDepotTransferRule(ValidationRule):
+    """Flags securities with a depot transfer (TRANSFER_OUT) that has no linked destination account.
+    Portfolio Performance records the destination via a cross-entry link; a missing link indicates
+    corrupt or stale-cache data, and the transferred shares' cost basis stays attributed to the
+    source account instead of the destination."""
+
+    @classmethod
+    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: Config) -> dict[str, Any]:
+        transfer_outs = portfolio.securities_account_transactions.pipe(filter_by_type, transaction_types=TransactionType.TRANSFER_OUT)
+        target = transfer_outs.get('transferTargetAccount')  # optional in the schema, so absent on hand-built frames
+        unlinked = transfer_outs.iloc[0:0] if target is None else transfer_outs[target.fillna('').astype(str).str.strip() == '']
+        return {
+            'unlinked_transfers': unlinked,
+            'account_names': portfolio.securities_accounts['name'],
+        }
+
+    def validate(self, entity: pd.Series, entity_id: str, context: dict[str, Any]) -> tuple[bool, str | None]:
+        is_error, message = super().validate(entity, entity_id, context)
+        if not self._should_apply():
+            return is_error, message
+
+        unlinked = context['unlinked_transfers']
+        security_transfers = unlinked[unlinked.index.get_level_values('securityId') == entity_id]
+        if security_transfers.empty:
+            return False, None
+
+        account_names = context['account_names']
+        details = ', '.join(
+            f'{shares:.2f} from "{account_names.get(account_id, account_id)}"'
+            for (_date, account_id, _sec), shares in security_transfers['shares'].items()
+        )
+        message = f'has a depot transfer with no linked destination account ({details}); cost basis stays with the source account (corrupt or stale-cache data)'
+        return self.is_error(), message
+
+
 def create_built_in_securities_rules() -> list[ValidationRule]:
     """Data-integrity rules that run by default; a user-configured rule of the same type replaces the built-in one."""
     return [
         NegativeShareBalanceRule(rule_type='negative-share-balance', value=None, severity='warning', tolerance=0.001),
+        UnlinkedDepotTransferRule(rule_type='unlinked-depot-transfer', value=None, severity='warning'),
     ]
 
 
@@ -226,6 +263,7 @@ _RULE_TYPES = {
     'vap-liquidity': VapLiquidityRule,
     'paid-tax-validation': PaidTaxValidationRule,
     'negative-share-balance': NegativeShareBalanceRule,
+    'unlinked-depot-transfer': UnlinkedDepotTransferRule,
 }
 
 

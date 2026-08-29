@@ -120,12 +120,15 @@ class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
 
     def _parse_transactions(self) -> DataFrame[TransactionSchema]:
         transactions = (pd.read_sql_query("""
-select datetime(x.date) as date, ifnull(xu.forex_currency, x.currency) as currency, ifnull(xu.forex_amount, x.amount)-x.fees as amount_wo_fees, x.fees, x.taxes, x.uuid, x.account, x.type, x.security, x.shares, x.acctype
+select datetime(x.date) as date, ifnull(xu.forex_currency, x.currency) as currency, ifnull(xu.forex_amount, x.amount)-x.fees as amount_wo_fees, x.fees, x.taxes, x.uuid, x.account, x.type, x.security, x.shares, x.acctype, ce.to_acc as transferTargetAccount, xt.shares as transferTargetShares
 from xact as x
 left join xact_unit as xu on xu.xact = x.uuid and xu.type = 'GROSS_VALUE'
-        """, self._db.connection, index_col=['date', 'account', 'security'], parse_dates={"date": "%Y-%m-%d %H:%M:%S"}, dtype={'amount_wo_fees': np.float64, 'shares': np.float64, 'taxes': np.float64})
+left join xact_cross_entry as ce on ce.from_xact = x.uuid and ce.type = 'portfolio-transfer'
+left join xact as xt on xt.uuid = ce.to_xact
+        """, self._db.connection, index_col=['date', 'account', 'security'], parse_dates={"date": "%Y-%m-%d %H:%M:%S"}, dtype={'amount_wo_fees': np.float64, 'shares': np.float64, 'taxes': np.float64, 'transferTargetShares': np.float64})
                           .rename(columns={'amount_wo_fees': 'amount', 'acctype': 'accountType'}))
         transactions['shares'] = transactions['shares'] / _SCALE
+        transactions['transferTargetShares'] = transactions['transferTargetShares'] / _SCALE
         transactions['type'] = pd.Categorical(transactions['type'])
         transactions['amount'] = transactions.apply(
             lambda row: -1 if row['type'] in enum_list_to_values(_NEGATIVE_DEPOSIT_ACCOUNT_TRANSACTION_TYPES) else 1,

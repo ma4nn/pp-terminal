@@ -30,6 +30,7 @@ from pydantic import Field
 from pp_terminal.commands.simulate_pmt import PmtConfig
 from pp_terminal.commands.view_accounts import ViewAccountsConfig
 from pp_terminal.exceptions import ConfigValidationError
+from pp_terminal.validation.rules import ValidateConfig
 from pp_terminal.utils.config import (
     ConfigModel,
     build_config_model,
@@ -249,3 +250,11 @@ def test_should_skip_plugin_that_is_not_a_config_model(monkeypatch: pytest.Monke
 
     assert command_config(get_config(), SafeWithdrawalConfig).years == 40
     assert 'simulate.broken' in caplog.text
+
+
+def test_should_accept_reconfiguring_the_unlinked_depot_transfer_builtin_rule(tmp_path: Path) -> None:
+    validated_toml_loader(_write_config(tmp_path, '[[commands.validate.securities.rules]]\ntype = "unlinked-depot-transfer"\nseverity = "error"\n'))
+
+    rules = command_config(get_config(), ValidateConfig).securities.rules
+    assert rules[0].type == 'unlinked-depot-transfer'
+    assert rules[0].severity == 'error'

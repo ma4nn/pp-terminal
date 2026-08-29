@@ -104,7 +104,7 @@ CONFIG_TEMPLATE = """\
 # --- Validate: security rules ---
 # Types: price-staleness, price-limit, price-limit-from-attribute,
 # cost-basis-limit, cost-basis-limit-from-attribute, paid-tax-validation,
-# negative-share-balance.
+# negative-share-balance, unlinked-depot-transfer.
 
 #[[commands.validate.securities.rules]]
 #type = "price-staleness"

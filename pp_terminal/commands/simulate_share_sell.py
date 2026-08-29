@@ -28,8 +28,8 @@ import typer
 from pandera.typing import DataFrame
 from pydantic import Field
 
-from pp_terminal.data.filters import filter_by_account_and_security, filter_by_security, filter_by_account
-from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots, finalize_sell_lots
+from pp_terminal.data.filters import filter_by_security, filter_by_account
+from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots_per_security, finalize_sell_lots
 from pp_terminal.data.tax import load_prepaid_tax_data
 from pp_terminal.domain.sell_strategy import (
     SellStrategy, FixedSharesStrategy, MinTaxStrategy, TargetGrossStrategy, AllocationPreservingStrategy
@@ -112,6 +112,13 @@ def _validate_sell_arguments(
         raise InputError("a minimum amount requires preserve-allocation (a taxonomy)")
 
 
+def _sale_prices(security_ids: list[str], latest_prices: pd.Series, price: Money | None) -> pd.Series:
+    """One sale price per security: the explicit override if given, each security's latest price otherwise."""
+    if price:
+        return pd.Series(price, index=security_ids, dtype='float64')
+    return latest_prices.reindex(security_ids)
+
+
 def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         portfolio: Portfolio,
         config: Config,
@@ -134,35 +141,38 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
 
     if security_id:
         holdings = holdings.pipe(filter_by_security, security_id=security_id)
-    if account_id:
-        holdings = holdings.pipe(filter_by_account, account_id=account_id)
 
     if holdings.empty:
         return pd.DataFrame()
 
-    security_ids = holdings.index.get_level_values('securityId').unique()
-    latest_prices = snapshot.latest_prices
+    all_transactions = snapshot.securities_account_transactions  # kept across all accounts so cost_basis can relocate transferred lots
 
+    if account_id:
+        # offer only securities with a positive net share balance in the requested account
+        # (snapshot.shares already drops zero/negative balances); the cross-account FIFO below still
+        # relocates linked-transfer lots, so a security transferred into the account stays sellable
+        holdings = holdings.pipe(filter_by_account, account_id=account_id)
+
+    security_ids = list(holdings.index.get_level_values('securityId').unique())
+
+    latest_prices = snapshot.latest_prices
     missing_prices = [sid for sid in security_ids if sid not in latest_prices.index]
     if missing_prices:
         raise InputError(f"No price data for: {', '.join(missing_prices)}")
 
     exempt_rate = Percent(config.tax.exemption_rate)
-    all_enriched = []
-    for (acc_id, sec_id, _currency), _shares_held in holdings.items():
-        transactions = snapshot.securities_account_transactions.pipe(
-            filter_by_account_and_security, security_id=sec_id, account_id=acc_id
-        )
-        sale_price = price if price else latest_prices.loc[sec_id]
-        sell_ctx = SellContext(snapshot.date, sale_price, tax_rate, exempt_rate, tax_csv_data)
-        enriched = enrich_fifo_lots(transactions, sell_ctx)
-        if not enriched.empty:
-            all_enriched.append(enriched)
-
-    if not all_enriched:
+    result = enrich_fifo_lots_per_security(all_transactions, {
+        sec_id: SellContext(snapshot.date, sale_price, tax_rate, exempt_rate, tax_csv_data)
+        for sec_id, sale_price in _sale_prices(security_ids, latest_prices, price).items()
+    })
+    if result.empty:
         return pd.DataFrame()
 
-    result = pd.concat(all_enriched)
+    # enrichment spans all accounts to resolve transfers; keep only lots residing in the requested account
+    if account_id:
+        result = result.pipe(filter_by_account, account_id=account_id)
+        if result.empty:
+            return pd.DataFrame()
 
     category_by_security = _resolve_categories(portfolio, taxonomy, holdings) if taxonomy else None
     strategy = _build_strategy(shares, target_net, target_gross, category_by_security, min_amount)

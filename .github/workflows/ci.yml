@@ -9,7 +9,7 @@ on:
       - master
   release:
     types:
-      - created
+      - published
   workflow_dispatch:
 
 jobs:
@@ -21,26 +21,21 @@ jobs:
     strategy:
       matrix:
         python-version: [ "3.13", "3.14" ]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
 
     steps:
     - uses: actions/checkout@v7
       with:
         submodules: true
 
-    - name: Install Poetry
-      run: |
-        curl -sSL https://install.python-poetry.org | python3 -
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
-        python-version: ${{ matrix.python-version }}
-        allow-prereleases: true
-        cache: 'poetry'
+        enable-cache: true
 
     - name: Install Dependencies
-      run: make install
+      run: make install ARGS="--locked"
 
     - name: Run Code Checks
       run: make check
@@ -52,49 +47,59 @@ jobs:
     name: Build Package
     needs: test
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: read
+
+    env:
+      UV_PYTHON: "3.14"
 
     steps:
     - uses: actions/checkout@v7
       with:
         submodules: true
-        fetch-depth: 0  # we need everything for poetry-dynamic-versioning
+        fetch-depth: 0  # we need all tags for hatch-vcs versioning
 
-    - name: Install Poetry
-      run: |
-        curl -sSL https://install.python-poetry.org | python3 -
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-    - uses: actions/setup-python@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
-        python-version: "3.14"
-        cache: 'poetry'
-
-    - name: Install Dependencies
-      run: make install ARGS="--no-root"
+        enable-cache: true
 
     - name: Build Package
-      run: make build
+      run: make build ARGS="--locked"
 
-    - name: Install the built wheel
-      run: |
-        pip install dist/*.whl
-
-    - name: Run the built wheel
-      run: |
-        pp-terminal --version
-
+    # upload before the smoke test so code executed by the install cannot alter the published artifact
     - name: Upload Package
+      if: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
       uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions
         path: dist/
 
+    - name: Check Package Metadata
+      run: uvx --no-build twine@7.0.0 check --strict dist/*
+
+    - name: Install and smoke-test the built wheel
+      env:
+        RELEASE_TAG: ${{ github.event.release.tag_name }}
+      run: |
+        set -o pipefail
+        uv venv /tmp/wheel-test
+        VIRTUAL_ENV=/tmp/wheel-test uv sync --locked --no-dev --no-install-project --active --no-build
+        uv pip install --no-build --no-deps --python /tmp/wheel-test/bin/python dist/*.whl
+        PP=/tmp/wheel-test/bin/pp-terminal
+        $PP --version
+        if [ -n "$RELEASE_TAG" ]; then
+          $PP --version | grep -qxF "pp-terminal version: ${RELEASE_TAG#v}"
+        fi
+        # both XStream reference flavors, to exercise the packaged ppxml2db end-to-end
+        for xml in tests/fixtures/kommer.ids.xml tests/fixtures/kommer.xml; do
+          $PP --file "$xml" --output json --no-cache view accounts | jq -e 'length > 0' > /dev/null
+        done
+
   publish-to-testpypi:
     name: Publish to TestPyPI
     needs: build
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     environment: test-pypi
 
@@ -109,13 +114,15 @@ jobs:
           path: dist/
 
       - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          attestations: true
 
   publish-to-pypi:
     name: Publish to PyPI
     needs: publish-to-testpypi
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     environment: pypi
 
@@ -130,4 +137,6 @@ jobs:
           path: dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
+        with:
+          attestations: true

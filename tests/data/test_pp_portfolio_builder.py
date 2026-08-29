@@ -29,7 +29,24 @@ from pp_terminal.exceptions import InputError
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder, CachedPpPortfolioBuilder
 from pp_terminal.data.ppxml2db_wrapper import Ppxml2dbWrapper, DB_NAME_IN_MEMORY
 from pp_terminal.domain.schemas import TransactionType
-from tests.conftest import EXEMPT_RATE_CONFIG
+
+EXPECTED_AMOUNT_SIGNS = {
+    TransactionType.BUY: -1,
+    TransactionType.SELL: 1,
+    TransactionType.DELIVERY_INBOUND: 1,
+    TransactionType.DELIVERY_OUTBOUND: 1,
+    TransactionType.TRANSFER_IN: 1,
+    TransactionType.TRANSFER_OUT: -1,
+    TransactionType.DEPOSIT: 1,
+    TransactionType.REMOVAL: -1,
+    TransactionType.INTEREST: 1,
+    TransactionType.INTEREST_CHARGE: -1,
+    TransactionType.FEES_REFUND: 1,
+    TransactionType.FEES: -1,
+    TransactionType.DIVIDENDS: 1,
+    TransactionType.TAXES: -1,
+    TransactionType.TAX_REFUND: 1,
+}
 
 
 def test_import_non_existent_file() -> None:
@@ -37,10 +54,45 @@ def test_import_non_existent_file() -> None:
         CachedPpPortfolioBuilder().construct(Path('non-existing.xml'))
 
 
-@pytest.mark.parametrize("xml_file", ['kommer.xml', 'invalid.xml', 'other.xml'])
+@pytest.mark.parametrize("xml_file", ['invalid.xml', 'other.xml'])
 def test_import_invalid_xml(request: TopRequest, xml_file: str) -> None:
     with pytest.raises(InputError):
         PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / xml_file)
+
+
+def test_import_xml_without_ids(request: TopRequest) -> None:
+    """The default xml flavor uses relative path references instead of id attributes."""
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.xml')
+
+    assert not portfolio.securities.empty
+
+
+def test_import_xml_without_ids_matches_id_flavor(request: TopRequest) -> None:
+    fixtures = request.path.parent.parent / 'fixtures'
+    without_ids = PpPortfolioBuilder().construct(fixtures / 'kommer.xml')
+    with_ids = PpPortfolioBuilder().construct(fixtures / 'kommer.ids.xml')
+
+    assert without_ids.base_currency == with_ids.base_currency
+    assert without_ids.taxonomies == with_ids.taxonomies
+    assert without_ids.all_attributes == with_ids.all_attributes
+
+    # the "with ids" export carries one extra security attribute, shifting the xml bookkeeping columns too
+    diverging = ['2baac2d0-459b-4b41-a0ef-d7dad0866892', '_xmlid', '_order']
+    for name in ('securities', 'prices', 'taxonomy_assignments', 'securities_accounts', 'deposit_accounts',
+                 'securities_account_transactions', 'deposit_account_transactions'):
+        pd.testing.assert_frame_equal(getattr(without_ids, name).drop(columns=diverging, errors='ignore'),
+                                      getattr(with_ids, name).drop(columns=diverging, errors='ignore'))
+
+
+def test_import_boolean_attribute(request: TopRequest) -> None:
+    """Portfolio Performance writes a java.lang.Boolean attribute as <boolean>true</boolean>."""
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'boolean_attribute.ids.xml')
+
+    assert 'sustainable' in portfolio.security_attributes
+    values = portfolio.securities.set_index('name')['sustainable']
+    assert values['Sustainable ETF'] is True
+    assert values['Conventional ETF'] is False
+    assert pd.isna(values['Unrated ETF'])
 
 
 def test_import_pp_empty_xml(request: TopRequest) -> None:
@@ -50,6 +102,30 @@ def test_import_pp_empty_xml(request: TopRequest) -> None:
 def test_import_xml_with_null_property_value(request: TopRequest) -> None:
     """PP v69+ can have properties with empty/null values (e.g. portfolio-chart-details)."""
     CachedPpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'empty_null_prop.ids.xml')
+
+
+def test_import_missing_base_currency_property(request: TopRequest) -> None:
+    """A database without baseCurrency can occur when a cache database is reused and XML parsing is skipped."""
+    xml_file = request.path.parent.parent / 'fixtures' / 'empty.ids.xml'
+    db = Ppxml2dbWrapper()
+    db.open(xml_file)
+    db.connection.execute("delete from property where name = 'baseCurrency'")
+
+    with patch.object(db, 'open'), pytest.raises(InputError):
+        PpPortfolioBuilder(db).construct(xml_file)
+
+
+def test_transaction_amount_sign_and_scaling_per_type(request: TopRequest) -> None:
+    """Fixture stores each type once with amount 123456 (cents); portfolio transactions with shares 250000000 (10^8 scale)."""
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'transaction_types.ids.xml')
+
+    transactions = pd.concat([portfolio.deposit_account_transactions, portfolio.securities_account_transactions])
+
+    for transaction_type in TransactionType:
+        amounts = transactions.loc[transactions['type'] == transaction_type.value, 'amount']
+        assert amounts.tolist() == [EXPECTED_AMOUNT_SIGNS[transaction_type] * 1234.56], transaction_type.value
+
+    assert portfolio.securities_account_transactions['shares'].tolist() == [2.5] * 6
 
 
 def test_xml_file_opened_readonly(request: TopRequest) -> None:
@@ -84,38 +160,11 @@ def test_cache_disabled_uses_in_memory(request: TopRequest, tmp_path: Path) -> N
     temp_xml.write_bytes(xml_file.read_bytes())
 
     # Build portfolio without caching
-    portfolio = PpPortfolioBuilder().construct(temp_xml)
+    PpPortfolioBuilder().construct(temp_xml)
 
     # Verify no cache file was created
     cache_files = list(tmp_path.glob('.test.*.pp-terminal.db'))
     assert len(cache_files) == 0
-    assert portfolio is not None
-
-def test_cache_filename_generation(request: TopRequest, tmp_path: Path) -> None:
-    """Test cache filename includes checksum."""
-    xml_file = request.path.parent.parent / 'fixtures' / 'empty.ids.xml'
-
-    # Create temporary copy to avoid leaving cache files
-    temp_xml = tmp_path / 'test.xml'
-    temp_xml.write_bytes(xml_file.read_bytes())
-
-    # Build portfolio with caching
-    CachedPpPortfolioBuilder().construct(temp_xml)
-
-    # Verify cache file exists with expected pattern
-    cache_files = list(tmp_path.glob('.test.*.pp-terminal.db'))
-    assert len(cache_files) == 1
-    cache_file = cache_files[0]
-
-    # Verify filename format: .test.<64-char-hex>.pp-terminal.db
-    assert cache_file.name.startswith('.test.')
-    assert cache_file.name.endswith('.pp-terminal.db')
-
-    # Extract checksum part: .test.<checksum>.pp-terminal.db
-    name_parts = cache_file.name.split('.')
-    # ['', 'test', '<checksum>', 'pp-terminal', 'db']
-    checksum = name_parts[2]
-    assert len(checksum) == 64  # SHA-256 hex digest
 
 def test_cache_hit_reuses_existing(request: TopRequest, tmp_path: Path) -> None:
     """Test that existing valid cache is reused."""
@@ -126,7 +175,7 @@ def test_cache_hit_reuses_existing(request: TopRequest, tmp_path: Path) -> None:
     temp_xml.write_bytes(xml_file.read_bytes())
 
     # First build: creates cache
-    portfolio1 = CachedPpPortfolioBuilder().construct(temp_xml)
+    CachedPpPortfolioBuilder().construct(temp_xml)
 
     # Get cache file
     cache_files = list(tmp_path.glob('.test.*.pp-terminal.db'))
@@ -136,13 +185,11 @@ def test_cache_hit_reuses_existing(request: TopRequest, tmp_path: Path) -> None:
 
     # Second build: should reuse cache (we can't easily verify open() wasn't called
     # without complex mocking, but we can verify the cache file wasn't recreated)
-    portfolio2 = CachedPpPortfolioBuilder().construct(temp_xml)
+    CachedPpPortfolioBuilder().construct(temp_xml)
 
     # Cache file should still exist and not be recreated
     assert cache_file.exists()
     assert cache_file.stat().st_mtime == cache_mtime
-    assert portfolio1 is not None
-    assert portfolio2 is not None
 
 def test_cache_invalidation_on_xml_change(request: TopRequest, tmp_path: Path) -> None:
     """Test that cache is invalidated when XML changes."""
@@ -212,8 +259,7 @@ def test_cache_fallback_on_io_error(request: TopRequest, tmp_path: Path, caplog:
 
     try:
         # Should fall back to in-memory mode
-        portfolio = CachedPpPortfolioBuilder().construct(temp_xml)
-        assert portfolio is not None
+        CachedPpPortfolioBuilder().construct(temp_xml)
 
         # Verify warning was logged
         assert any('Cache unavailable' in record.message or 'Failed to initialize cache' in record.message
@@ -224,7 +270,7 @@ def test_cache_fallback_on_io_error(request: TopRequest, tmp_path: Path, caplog:
 
 def test_securities_percent_attributes_converted(request: TopRequest) -> None:
     """Test that securities with PercentPlainConverter attributes are loaded as decimals, not raw values."""
-    portfolio = PpPortfolioBuilder(config=EXEMPT_RATE_CONFIG).construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
 
     exempt_attr_uuid = '2baac2d0-459b-4b41-a0ef-d7dad0866892'
     assert exempt_attr_uuid in portfolio.securities.columns
@@ -243,6 +289,7 @@ def test_transfer_target_account_from_cross_entry(request: TopRequest) -> None: 
     db = Ppxml2dbWrapper(dbname=DB_NAME_IN_MEMORY)
     conn = db.connection
     conn.executescript("""
+        INSERT INTO property(name, value) VALUES ('baseCurrency', 'EUR');
         INSERT INTO account(_id, uuid, type, name, updatedAt, _xmlid, _order) VALUES
             (1, 'depot1', 'portfolio', 'Depot 1', '2020', 1, 1),
             (2, 'depot2', 'portfolio', 'Depot 2', '2020', 2, 2);

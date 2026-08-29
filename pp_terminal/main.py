@@ -22,17 +22,20 @@ import locale
 from pathlib import Path
 from types import SimpleNamespace
 import logging
-import os
-from typing import Optional
+import zlib
+from typing import Any, Optional
 
+import click
 from rich import print # pylint: disable=redefined-builtin
+from rich.console import Console as RichConsole
 from rich.logging import RichHandler
 import typer
+from typer.core import TyperGroup
 from typing_extensions import Annotated
 from typer_config import use_config
 
 from pp_terminal.output.strategy_factory import create_strategy
-from pp_terminal.utils.config import validated_config_callback, get_config
+from pp_terminal.utils.config import validated_config_callback, get_config, get_config_path
 from pp_terminal.exceptions import InputError
 from pp_terminal.utils.helper import set_precision
 from pp_terminal.output.strategy import OutputFormat
@@ -42,12 +45,31 @@ from pp_terminal.data.xml_anonymizer import XmlAnonymizer
 from pp_terminal.mcp_server import start_mcp
 from . import __version__
 
-app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+VERBOSE_HINT = '%s (run with --verbose for details)'
+
+
+class ErrorHandlingGroup(TyperGroup):
+    """Commands raise InputError once the main callback has returned, out of reach of its own handler."""
+
+    def invoke(self, ctx: Any) -> Any:  # typer vendors its own click, so the Context type is not click's
+        try:
+            return super().invoke(ctx)
+        except InputError as e:
+            # read the flag from the parsed parameters, ctx.obj is unset when the callback itself failed
+            if ctx.params.get('verbose'):
+                raise
+
+            log.critical(VERBOSE_HINT, e)
+            raise typer.Abort() from e
+
+
+app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich", cls=ErrorHandlingGroup)
 app.add_typer(typer.Typer(no_args_is_help=True), name="simulate", help="Run simulations on the portfolio data, like share sells or German Vorabpauschale.")
 app.add_typer(typer.Typer(no_args_is_help=True), name="view", help="View details about portfolio entities like accounts or securities.")
 
 # init default logging (this is e.g. import for errors during command plugin load)
-logging.basicConfig(level=logging.WARN, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(rich_tracebacks=False, show_time=False, show_path=False)])
+logging.basicConfig(level=logging.WARN, format="%(message)s", datefmt="[%X]",
+                    handlers=[RichHandler(rich_tracebacks=False, show_time=False, show_path=False, console=RichConsole(stderr=True))])
 log = logging.getLogger(__name__)
 
 locale.setlocale(category=locale.LC_ALL, locale='')
@@ -68,18 +90,20 @@ def _create_anonymized_temp_file(original_file: Path) -> Path:
     """Create a deterministic anonymized version of the XML file next to the original."""
     temp_path = original_file.parent / f".{original_file.stem}.anon{original_file.suffix}"
 
-    # Use deterministic seed based on file path
-    seed = hash(str(original_file.resolve())) % (2**31)
+    # Use deterministic seed based on file path (crc32, as str hashes are randomized per process)
+    seed = zlib.crc32(str(original_file.resolve()).encode()) % (2**31)
     log.debug("Anonymizing data with seed %d", seed)
 
-    anonymizer = XmlAnonymizer(seed=seed, config=get_config().get('anonymize', {}).get('attributes', {}))
+    anonymize_config = get_config().anonymize
+    attributes = {uuid: spec.model_dump(by_alias=True) for uuid, spec in anonymize_config.attributes.items()} if anonymize_config else {}
+    anonymizer = XmlAnonymizer(seed=seed, config=attributes)
     anonymizer.anonymize_file(original_file, temp_path)
     log.debug("Created anonymized file at %s", temp_path)
 
     # Register cleanup on program exit
     def cleanup() -> None:
         try:
-            os.unlink(temp_path)
+            temp_path.unlink(missing_ok=True)
             log.debug("Removed temporary anonymized file at %s", temp_path)
         except OSError as e:
             log.warning("Failed to remove temporary file %s: %s", temp_path, e)
@@ -97,7 +121,7 @@ def _create_anonymized_temp_file(original_file: Path) -> Path:
 @use_config(validated_config_callback)
 def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         ctx: typer.Context,
-        file: Annotated[Path, typer.Option(help="Portfolio Performance XML file.", show_default=False, exists=True, file_okay=True, dir_okay=False, readable=True)],
+        file: Annotated[Optional[Path], typer.Option(help="Portfolio Performance XML file.", show_default=False, exists=True, file_okay=True, dir_okay=False, readable=True)] = None,
         output: OutputFormat = OutputFormat.TABLE,
         precision: int = 4,
         cache: Annotated[bool, typer.Option('--cache/--no-cache', help='Create cache file for XML.')] = True,
@@ -106,18 +130,31 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Optional[bool],
             typer.Option("--version", callback=version_callback, is_eager=True),  # declared the option name to avoid --no-version
         ] = None,
-        verbose: Annotated[Optional[bool], typer.Option('--verbose', help='Enable verbose logging.')] = None,
+        verbose: Annotated[Optional[bool], typer.Option('--verbose', '--debug', help='Enable verbose logging.')] = None,
 ) -> None:
 
+    # commands like "init" bootstrap a config and thus need neither a file nor a portfolio
+    if ctx.invoked_subcommand == "init":
+        return
+
     if verbose:
-        logging.basicConfig(force=True, level=logging.DEBUG, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(rich_tracebacks=True, show_time=False)])
+        logging.basicConfig(force=True, level=logging.DEBUG, format="%(message)s", datefmt="[%X]",
+                            handlers=[RichHandler(rich_tracebacks=True, show_time=False, console=RichConsole(stderr=True))])
+
+    if config_path := get_config_path():
+        log.debug('Loaded config from file "%s"', config_path)
+
+    if file is None:
+        raise click.BadParameter("no Portfolio Performance file given, pass --file or set 'file' in your config", param_hint="'--file'")
+
+    log.debug('Using Portfolio Performance file "%s"', file)
 
     set_precision(precision)
-    should_anonymize = anonymize or 'anonymize' in get_config()
+    should_anonymize = anonymize or get_config().anonymize is not None
     source_file = _create_anonymized_temp_file(file) if should_anonymize else file
 
     try:
-        builder = CachedPpPortfolioBuilder(config=get_config()) if cache else PpPortfolioBuilder(config=get_config())
+        builder = CachedPpPortfolioBuilder() if cache else PpPortfolioBuilder()
 
         ctx.obj = SimpleNamespace(
             source_file=source_file,
@@ -126,11 +163,14 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             config=get_config(),
             verbose=verbose or False)
 
+        if should_anonymize:
+            log.warning('The data has been anonymized, amounts do not reflect the real portfolio.')
+
     except (RuntimeError, InputError) as e:
         if verbose:
             raise e
 
-        log.critical(e)
+        log.critical(VERBOSE_HINT, e)
         raise typer.Abort()
 
 

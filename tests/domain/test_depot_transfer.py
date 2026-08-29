@@ -26,9 +26,10 @@ import pytest
 from _pytest.logging import LogCaptureFixture
 
 from pp_terminal.commands.simulate_share_sell import prepare_share_sell_df
-from pp_terminal.domain.cost_basis import calculate_total_cost_basis, enrich_fifo_lots
+from pp_terminal.domain.cost_basis import SellContext, calculate_total_cost_basis, enrich_fifo_lots
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import AccountType, TransactionType, TaxPaidSchema
+from pp_terminal.utils.config import empty_config
 
 TAX_RATE = 26.375
 SELL_DATE = datetime(2024, 12, 31)
@@ -70,7 +71,7 @@ def build_portfolio(
 
 
 def remaining_lots(portfolio: Portfolio) -> pd.DataFrame:
-    lots = enrich_fifo_lots(portfolio.securities_account_transactions, SELL_DATE, sell_price=160.0, tax_rate=TAX_RATE)
+    lots = enrich_fifo_lots(portfolio.securities_account_transactions, SellContext(SELL_DATE, 160.0, TAX_RATE))
     return lots.reset_index().sort_values(['date', 'accountId'])
 
 
@@ -233,7 +234,7 @@ def test_share_sell_account_filter_excludes_other_accounts() -> None:
         [datetime(2021, 3, 1), 'depot2', 'sec1', TransactionType.BUY.value, -700.0, 5.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
     ])
 
-    result = prepare_share_sell_df(portfolio, {}, SELL_DATE, TAX_RATE, account_id='depot1')
+    result = prepare_share_sell_df(portfolio, empty_config(), SELL_DATE, TAX_RATE, account_id='depot1')
 
     assert result['shares'].sum() == pytest.approx(10.0)
     assert result['purchasePrice'].iloc[0] == pytest.approx(100.0)
@@ -247,7 +248,7 @@ def test_share_sell_account_filter_includes_transferred_lots() -> None:
         [datetime(2023, 1, 15), 'depot1', 'sec1', TransactionType.TRANSFER_IN.value, 0.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
     ])
 
-    result = prepare_share_sell_df(portfolio, {}, SELL_DATE, TAX_RATE, account_id='depot1')
+    result = prepare_share_sell_df(portfolio, empty_config(), SELL_DATE, TAX_RATE, account_id='depot1')
 
     assert result['shares'].sum() == pytest.approx(10.0)
     assert result['purchasePrice'].iloc[0] == pytest.approx(100.0)
@@ -277,7 +278,7 @@ def test_transfer_merging_same_date_lot_does_not_double_count_deemed_income() ->
     ])
     tax_data = _deemed_income_data(2021, 'sec1', 1.0)
 
-    lots = enrich_fifo_lots(portfolio.securities_account_transactions, SELL_DATE, sell_price=160.0, tax_rate=TAX_RATE, tax_csv_data=tax_data)
+    lots = enrich_fifo_lots(portfolio.securities_account_transactions, SellContext(SELL_DATE, 160.0, TAX_RATE, tax_csv_data=tax_data))
 
     # 20 held shares x 1.0/share deemed income for 2021 = 20.0; the bug reports 40.0.
     assert lots['deemedIncome'].sum() == pytest.approx(20.0)
@@ -292,7 +293,7 @@ def test_fixed_shares_selects_globally_oldest_lot_across_accounts() -> None:
         [datetime(2020, 1, 15), 'depot2', 'sec1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
     ])
 
-    result = prepare_share_sell_df(portfolio, {}, SELL_DATE, TAX_RATE, security_id='sec1', shares=5.0)
+    result = prepare_share_sell_df(portfolio, empty_config(), SELL_DATE, TAX_RATE, security_id='sec1', shares=5.0)
 
     assert result.iloc[0]['date'] == datetime(2020, 1, 15)          # depot2's older lot, not depot1's
     assert result.iloc[0]['purchasePrice'] == pytest.approx(100.0)
@@ -316,7 +317,7 @@ def test_share_sell_account_filter_ignores_missing_price_of_security_transferred
         [datetime(2021, 3, 1), 'depot1', 'sec2', TransactionType.BUY.value, -1500.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0, None],
     ], securities=securities, prices=prices)
 
-    result = prepare_share_sell_df(portfolio, {}, SELL_DATE, TAX_RATE, account_id='depot1')
+    result = prepare_share_sell_df(portfolio, empty_config(), SELL_DATE, TAX_RATE, account_id='depot1')
 
     # only sec2 (held & priced in depot1) is offered; sec1's missing price no longer raises InputError
     assert set(result['securityName']) == {'Held ETF'}

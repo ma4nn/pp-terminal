@@ -66,7 +66,33 @@
                   <updatedAt>2024-01-05T00:00:00.000001Z</updatedAt>
                   <type>BUY</type>
                 </portfolio-transaction>
-                <portfolio-transaction reference="15"/>
+                <portfolio-transaction id="15">
+                  <uuid>test-txn-sell-portfolio-001</uuid>
+                  <date>2024-08-15T00:00</date>
+                  <currencyCode>EUR</currencyCode>
+                  <amount>22000</amount>
+                  <security reference="2"/>
+                  <crossEntry class="buysell" id="14">
+                    <portfolio reference="11"/>
+                    <portfolioTransaction reference="15"/>
+                    <account reference="7"/>
+                    <accountTransaction id="13">
+                      <uuid>test-txn-sell-account-001</uuid>
+                      <date>2024-08-15T00:00</date>
+                      <currencyCode>EUR</currencyCode>
+                      <amount>22000</amount>
+                      <security reference="2"/>
+                      <crossEntry class="buysell" reference="14"/>
+                      <shares>0</shares>
+                      <updatedAt>2024-01-05T00:00:00.000002Z</updatedAt>
+                      <type>SELL</type>
+                    </accountTransaction>
+                  </crossEntry>
+                  <shares>4000000000</shares>
+                  <units/>
+                  <updatedAt>2024-01-05T00:00:00.000002Z</updatedAt>
+                  <type>SELL</type>
+                </portfolio-transaction>
               </transactions>
               <attributes>
                 <map/>
@@ -81,33 +107,7 @@
           <updatedAt>2024-01-05T00:00:00.000001Z</updatedAt>
           <type>BUY</type>
         </account-transaction>
-        <account-transaction id="13">
-          <uuid>test-txn-sell-account-001</uuid>
-          <date>2024-08-15T00:00</date>
-          <currencyCode>EUR</currencyCode>
-          <amount>22000</amount>
-          <security reference="2"/>
-          <crossEntry class="buysell" id="14">
-            <portfolio reference="11"/>
-            <portfolioTransaction id="15">
-              <uuid>test-txn-sell-portfolio-001</uuid>
-              <date>2024-08-15T00:00</date>
-              <currencyCode>EUR</currencyCode>
-              <amount>22000</amount>
-              <security reference="2"/>
-              <crossEntry class="buysell" reference="14"/>
-              <shares>4000000000</shares>
-              <units/>
-              <updatedAt>2024-01-05T00:00:00.000002Z</updatedAt>
-              <type>SELL</type>
-            </portfolioTransaction>
-            <account reference="7"/>
-            <accountTransaction reference="13"/>
-          </crossEntry>
-          <shares>0</shares>
-          <updatedAt>2024-01-05T00:00:00.000002Z</updatedAt>
-          <type>SELL</type>
-        </account-transaction>
+        <account-transaction reference="13"/>
       </transactions>
       <attributes>
         <map/>

@@ -28,7 +28,7 @@ from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import TaxPaidSchema, Percent
 from pp_terminal.domain.vap import calculate_base_yield_per_share, get_base_rate_for_year
-from pp_terminal.utils.config import get_tax_files, get_exempt_rate_attribute
+from pp_terminal.utils.config import Config
 from pp_terminal.validation.base import ValidationRule
 
 log = logging.getLogger(__name__)
@@ -47,14 +47,14 @@ class PaidTaxValidationRule(ValidationRule):
     """Validates calculated VAP base yield against paid tax data from CSV files."""
 
     @classmethod
-    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: dict[str, Any]) -> dict[str, Any]:
-        tax_files = get_tax_files(config)
+    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: Config) -> dict[str, Any]:
+        tax_files = config.tax.files
         tax_csv_data: DataFrame[TaxPaidSchema] | None = load_prepaid_tax_data(tax_files, portfolio) if tax_files else None
 
         return {
             'base_yield_by_year': cls._calculate_base_yield_since(portfolio),
             'tax_csv_data': tax_csv_data,
-            'exempt_rate_attr_uuid': get_exempt_rate_attribute(config),
+            'exempt_rate_attr_uuid': config.tax.exemption_rate_attribute,
         }
 
     @staticmethod

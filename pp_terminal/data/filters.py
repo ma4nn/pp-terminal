@@ -18,10 +18,18 @@
 """
 
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 
 from pp_terminal.domain.schemas import Attribute, TransactionType
+
+
+def retired_row_labels(df: pd.DataFrame) -> set[Any]:
+    """Returns the index labels of retired (inactive) rows, empty if not applicable."""
+    if 'isRetired' not in df.columns:
+        return set()
+    return set(df.index[df['isRetired'].eq(True)])
 
 
 def filter_earlier_than(df: pd.DataFrame, target_date: datetime) -> pd.DataFrame:
@@ -63,7 +71,7 @@ def filter_not_retired(df: pd.DataFrame) -> pd.DataFrame:
     return df[~df['isRetired']]
 
 
-def drop_empty_values(df: pd.DataFrame | pd.Series) -> pd.DataFrame:
+def drop_empty_values(df: pd.DataFrame | pd.Series, keep_columns: tuple[str, ...] = ()) -> pd.DataFrame:
     if df.empty:
         return df
 
@@ -84,14 +92,15 @@ def drop_empty_values(df: pd.DataFrame | pd.Series) -> pd.DataFrame:
 
     df.dropna(how='all', axis=0, inplace=True)
     if isinstance(df, pd.DataFrame):
-        df.dropna(how='all', axis=1, inplace=True)
+        empty = [column for column in df.columns if column not in keep_columns and df[column].isna().all()]
+        df.drop(columns=empty, inplace=True)
 
     return df
 
 
 def clean_for_display(df: pd.DataFrame, attributes: dict[str, Attribute]) -> pd.DataFrame:
     df = df.drop(columns=[col for col in df.columns if col.startswith('_')])
-    return df.rename(columns={uuid: attr.name for uuid, attr in attributes.items()})
+    return df.rename(columns={uuid: attr.column for uuid, attr in attributes.items()})
 
 
 _TAXONOMY_FULL_WEIGHT = 10000

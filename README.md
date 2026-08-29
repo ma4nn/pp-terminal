@@ -3,29 +3,34 @@
 ![build status](https://github.com/ma4nn/pp-terminal/actions/workflows/ci.yml/badge.svg) [![Join My Discord](https://dev-investor.de/wp-content/uploads/join-discord.svg)](https://dev-investor.de/chat)
 
 A powerful command-line interface (CLI) that allows programmatic access to [Portfolio Performance](https://www.portfolio-performance.info/) data 
-to offer a whole new level of insights into your assets.  
+to offer a whole new level of insights into your assets.
 
-_pp-terminal_ can act as an [MCP server](#mcp-server) to give AI models like Claude Opus, Gemini or Qwen access to your 
-(anonymized) portfolio to help you answer questions like
+_pp-terminal_ is a lightweight tool for all the nice-to-have features that won't make it into the official Portfolio Performance app.
+This can be because of country-specific tax rules, complex Java implementation, highly individual requirements, 
+too many edge-cases, etc.
+
+## Use Cases
+
+You can run the single commands individually or _pp-terminal_ can act as an [MCP server](#mcp-server) to give AI models like Claude Opus, Gemini or Qwen access to your 
+(anonymized) portfolio to help you answer questions like:
 - "Give me an overview of my portfolio"
 - "What do you think about my portfolio allocation? Am I overweight anywhere?"
 - "Do I have enough cash to cover the upcoming Vorabpauschale taxes?"
 - "I need 1k EUR after tax. Which securities should I sell to minimize taxes?"
 
-For example, _pp-terminal_ includes a CLI command to calculate the preliminary tax values ("Vorabpauschale") for Germany:
-
-![Vorabpauschale command in pp-terminal](docs/sample_vorabpauschale.png)
+Thís application **supports specific tax concepts** like FIFO, [Sparer-Pauschbetrag](https://de.wikipedia.org/wiki/Sparer-Pauschbetrag),
+[Grundfreibetrag](https://de.wikipedia.org/wiki/Grundfreibetrag_(Deutschland)), [Günstigerprüfung](https://de.wikipedia.org/wiki/G%C3%BCnstigerpr%C3%BCfung)
+and [Teilfreistellungen](https://de.wikipedia.org/wiki/Investmentsteuergesetz_(Deutschland)).  
 
 > [!IMPORTANT]
 > I am not a tax consultant. All results of this application are just a non-binding indication and without guarantee.
 > They may deviate from the actual values.
 
+For example, _pp-terminal_ includes a CLI command to calculate the [Vorabpauschale](https://de.wikipedia.org/wiki/Vorabpauschale) (preliminary taxes) for Germany:
+![Vorabpauschale command in pp-terminal](docs/sample_vorabpauschale.png)
+
 > [!TIP]
 > Using MoneyMoney for managing your finances? Check out how to [export Sankey Charts](https://github.com/ma4nn/moneymoney-sankey).
-
-_pp-terminal_ is a lightweight tool for all the nice-to-have features that won't make it into the official Portfolio Performance app.
-This can be because of country-dependant tax rules, complex Java implementation, highly individual requirements, 
-too many edge-cases, etc.
 
 1. [Available Commands](#available-commands)
 2. [Requirements](#requirements)
@@ -59,104 +64,77 @@ pp-terminal mcp
 
 ### Inspect Portfolio
 
-| Command           | Description                                                                            |
-|-------------------|----------------------------------------------------------------------------------------|
-| `view accounts`   | Get detailed information about the balances per each deposit and/or securities account |
-| `view securities` | Get detailed information about the securities                                          |
-| `view taxonomies` | Get detailed information about the taxonomies                                          |
+| Command            | Description                                                                            |
+|--------------------|----------------------------------------------------------------------------------------|
+| `view accounts`    | Get detailed information about the balances per each deposit and/or securities account |
+| `view cash-flows`  | Get the cumulative deposits, withdrawals and net contributions per currency            |
+| `view securities`  | Get detailed information about the securities                                          |
+| `view taxonomies`  | Get detailed information about the taxonomies                                          |
 
-The commands can be customized in the [configuration file](#configuration-file):
-```toml
-[commands.view.accounts]
-fields = ["AccountId", "Name", "Balance"]  # call with --fields=xx to see a list of all available fields
-```
+The displayed columns are configurable via `[commands.view.accounts]` / `[commands.view.securities]` in the
+[configuration file](#configuration-file) — run `pp-terminal init` for the field reference, and call a command with
+`--fields=xx` to list all available fields.
 
 ### Simulate Scenarios
 
 | Command               | Description                                                                                        |
 |-----------------------|----------------------------------------------------------------------------------------------------|
 | `simulate interest`   | Calculate how much interest you should have been earned per account and compare with actual values |
+| `simulate pmt`        | Calculate this year's net (after German tax) withdrawal so the portfolio lasts exactly N years at an assumed real return (amortization / annuity, recompute yearly) |
 | `simulate share-sell` | Calculate gains and taxes if a security would be sold in future (based on FIFO capital gains)      |
 | `simulate vap`        | Run a simulation for the expected German preliminary tax ("Vorabpauschale") on the portfolio       |
 
-The tax configuration for the simulations can be customized in the [configuration file](#configuration-file):
+Tax parameters (`[tax]`) and per-command assumptions (`[commands.simulate.*]`) live in the
+[configuration file](#configuration-file); run `pp-terminal init` for the fully annotated reference (CLI options take precedence).
+
+For `simulate pmt`, each `returns` entry is one scenario. An entry may be a fixed rate, or a per-category
+table that is blended over your current asset allocation into a single rate (holdings not assigned to a
+category in the taxonomy weigh in at 0%). The reserved `"*"` key sets a default rate for every category you
+do not list explicitly, so you only override the ones that differ. Mixing entries lets you compare fixed
+rates against your allocation:
 ```toml
-[tax]
-rate = 26.375  # percentage
-# Optionally define the already paid taxes per share (e.g. for the share-sell command)
-files = ["taxes_paid.csv"]  # Format: isin;year;deemed_income_per_share
-exemption-rate = 30  # percentage
-exemption-rate-attribute = "b3c38686-2d22-4b5d-8e38-e61dcf6fdde3"  # for per-security exemption rates
-allowance = 1000  # Sparerpauschbetrag (annual tax-free allowance) in EUR (2000 for joint assessment)
+taxonomy = "Asset Allocation"  # the Portfolio Performance taxonomy representing your asset allocation
+
+[commands.simulate.pmt]
+# fixed scenarios plus one blended from the allocation; keys are taxonomy category names
+returns = [2, 4, 6, { "*" = 4.0, "Eigenkapital" = 5.0, "Fremdkapital" = 1.9 }]
 ```
+Any such per-category returns are shown as a `Expected Return` column (one per scenario) in `view taxonomies`, next to the
+category's assignment counts, so you can cross-check them against your allocation.
+
+`simulate share-sell` reuses the global `taxonomy` as the default for `--preserve-allocation`, and
+`[commands.simulate.share-sell] min-amount` sets a per-order floor below which small holdings are consolidated or left unsold.
 
 ### Validate Data
 
-| Command               | Description                                                 |
-|-----------------------|-------------------------------------------------------------|
-| `validate`            | Run all validation checks on the portfolio data             |
-| `validate accounts`   | Run configured accounts validations, e.g. balance limits    |
-| `validate securities` | Run configured security validations, e.g. prices up-to-date |
+| Command    | Description                                      |
+|------------|--------------------------------------------------|
+| `validate` | Run all validation checks on the portfolio data  |
 
-This is a sample of validation rules that can be configured in the [configuration file](#configuration-file):
+Use the repeatable `--rule` option to run only specific rule types:
+```bash
+pp-terminal --file depot.xml validate --rule price-staleness --rule balance-limit
+```
+
+Rules are configured under `[commands.validate.accounts]` / `[commands.validate.securities]` as `[[...rules]]` arrays;
+`pp-terminal init` lists every rule type and field. Each rule has a `type` and an optional `severity` (`error` default,
+or `warning`), and rules run in the given order, triggering once per entity:
 ```toml
-# Note: the rules are processed in this order, each rule type only triggers once for each entity
-
-# Validate a certain bank account does not have more than a certain custody fee threshold
-[[commands.validate.accounts.rules]]
-type = "balance-limit"
-value = 25000
-applies-to = ["c9c57e01-7ea0-4e70-bed9-4656941f7687"]  # Portfolio Performance account id from the XML file
-
-# Validate that each bank account is within the deposit insurance limit
-[[commands.validate.accounts.rules]]
-type = "balance-limit"
-value = 100000
-
-# Use date attributes in Portfolio Performance to validate against (e.g. when special interest rate offers end)
-[[commands.validate.accounts.rules]]
-type = "date-passed-from-attribute"
-value = "fgdeb0dd-8bd7-47b1-ac3f-30fedd6a47e9"  # Portfolio Performance date attribute id from the XML file
-
-# Verify security prices are up-to-date
 [[commands.validate.securities.rules]]
 type = "price-staleness"
-severy = "error"  # default, can be omitted
-value = 90
-[[commands.validate.securities.rules]]
-type = "price-staleness"
-severity = "warning"
 value = 30
-
-# Validate current cost basis (FIFO) against limit, e.g. for exit taxation thresholds ("Wegzugsbesteuerung")
-[[commands.validate.securities.rules]]
-type = "cost-basis-limit"
-value = 500000.0
 severity = "warning"
-
-# Validate tax csv file
-[[commands.validate.securities.rules]]
-type = "paid-tax-validation"
-severity = "warning"
-tolerance = 0.01
 ```
 
-#### Temporal Validation
+**Built-in rules:** `negative-share-balance` runs by default (severity `warning`, tolerance `0.001` shares) and flags
+securities with a negative share balance in any account — a sign of missing or inconsistent transactions, since short
+positions aren't supported by Portfolio Performance. `unlinked-depot-transfer` also runs by default (severity
+`warning`) and flags depot transfers whose destination account link is missing, which leaves the transferred shares'
+cost basis attributed to the source account. Configuring a rule yourself replaces the built-in default; set
+`valid-months = []` to disable it.
 
-All validation rules optionally support temporal constraints through the `valid-months` configuration option. This allows rules to run only during specific months of the year:
-
-```toml
-# VAP liquidity check runs only in December and January (when VAP is calculated)
-[[commands.validate.accounts.rules]]
-type = "vap-liquidity"
-valid-months = [12, 1]  # 1=January, 12=December
-
-# Price staleness check runs only in March (e.g. for annual review)
-[[commands.validate.securities.rules]]
-type = "price-staleness"
-value = 90
-valid-months = [3]
-```
+**Temporal constraints:** every rule accepts `valid-months` (e.g. `[12, 1]`) to run only in the given calendar months —
+useful for seasonal checks like VAP liquidity in December/January.
 
 ### Export
 
@@ -169,20 +147,15 @@ Use the `--anonymize` flag to export an anonymized version:
 pp-terminal --file depot.xml --anonymize export anonymized.xml
 ```
 
-Anonymization can be customized in the [configuration file](#configuration-file):
-```toml
-[anonymize.attributes."a1b2c3d4-e5f6-7890-abcd-ef1234567890"]
-provider = "iban"  # for all available providers see https://faker.readthedocs.io/en/master/providers.html
-[anonymize.attributes."fgdeb0dd-8bd7-47b1-ac3f-30fedd6a47e9"]
-provider = "pyfloat"
-args = { min_value = 0.0, max_value = 1.0, right_digits = 2 }
-```
+Per-attribute anonymization is configured under `[anonymize.attributes."<uuid>"]` — a `provider` from
+[Faker](https://faker.readthedocs.io/en/master/providers.html) plus optional `args`; the section's presence alone enables
+anonymization. Run `pp-terminal init` for the format.
 
 ## Requirements
 
 - [pipx](https://pipx.pypa.io/latest/#install-pipx) to install the application (without having to worry about different Python runtimes)
 - Portfolio Performance version >= 0.70.3
-- Portfolio Performance file must be saved as "XML with id attributes"
+- Portfolio Performance file must be available as XML (with or without ID attributes)
 
 ## Installing
 
@@ -214,13 +187,15 @@ To view all available arguments you can always use the `--help` option.
 ### Configuration File
 To persist the CLI options you can pass a configuration file in [TOML format](https://toml.io/en/) with `pp-terminal --config=config.toml --help`.  
 
-The configuration file can also be provided as environment variable: `PP_TERMINAL_CONFIG=config.toml pp-terminal --help`
+If no `--config` is given, the tool automatically loads `$XDG_CONFIG_HOME/pp-terminal/config.toml` (defaulting to `~/.config/pp-terminal/config.toml`) when that file exists.
 
 The CLI options always overwrite the settings in the configuration file.
 
-```toml
-file = "portfolio_performance.xml"
-precision = 4
+`pp-terminal init` prints the **complete annotated reference** — every option, commented out. The quickest start is to
+write it to the auto-loaded location and uncomment what you need:
+
+```
+mkdir -p ~/.config/pp-terminal && pp-terminal init > ~/.config/pp-terminal/config.toml
 ```
 
 ### Customize Number Formats
@@ -238,7 +213,7 @@ To contribute improvements to _pp-terminal_ just follow these steps:
 
 1. Fork and clone this repository
 2. Run `make`
-3. Verify build with `poetry run pp-terminal --version`
+3. Verify build with `uv run pp-terminal --version`
 4. Create a new branch based on `master`: `git checkout master && git pull && git checkout -b your-patch`
 5. Implement your changes in this new branch
 6. Run `make` to verify everything is fine
@@ -271,28 +246,28 @@ e.g. a good starting point is [view_accounts.py](https://github.com/ma4nn/pp-ter
 
 The commands must be grouped by action, e.g. `view accounts` or `simulate share-sell`.
 
-Plugins can also contribute their own configuration section below `[commands]`. Register a [JSON Schema](https://json-schema.org/)
-(Draft 7) object fragment via the entry point `pp_terminal.config_schema`, named after the command path:
+Plugins can also contribute their own configuration section below `[commands]`. Register a [Pydantic](https://docs.pydantic.dev/)
+model via the entry point `pp_terminal.config_model`, named after the command path:
 
 ```toml
 # pyproject.toml
-[project.entry-points."pp_terminal.config_schema"]
-"simulate.safe-withdrawal" = "my_plugin.config:CONFIG_SCHEMA"
+[project.entry-points."pp_terminal.config_model"]
+"simulate.safe-withdrawal" = "my_plugin.config:SafeWithdrawalConfig"
 ```
 
 ```python
 # my_plugin/config.py
-CONFIG_SCHEMA = {
-    "type": "object",
-    "properties": {"years": {"type": "integer"}},
-    "additionalProperties": False,
-}
+from pp_terminal.utils.config import ConfigModel
+
+class SafeWithdrawalConfig(ConfigModel):
+    years: int = 40
 ```
 
-Users can then configure `[commands.simulate.safe-withdrawal]` in their config file, and the command reads the validated values
-via `get_command_config(config, 'simulate.safe-withdrawal.years')`. Redefining a section that _pp-terminal_ itself or another
-plugin already provides — or mounting inside one — is rejected. Entry point names have at most two segments (`<command>` or
-`<group>.<command>`), and fragments must be self-contained Draft-7 object schemas; `$ref` is not supported.
+Users can then configure `[commands.simulate.safe-withdrawal]` in their config file, and the command reads the validated,
+typed values via `command_config(config, SafeWithdrawalConfig).years`. Because the model extends `ConfigModel`, unknown keys are
+rejected and TOML-native types (dates, datetimes) are parsed automatically. Redefining a section that _pp-terminal_ itself or
+another plugin already provides — or mounting inside one — is rejected. Entry point names have at most two segments (`<command>`
+or `<group>.<command>`).
 
 The app uses [Typer](https://typer.tiangolo.com/) for composing the commands and [Rich](https://github.com/Textualize/rich)
 for nice console outputs. The Portfolio Performance XML file is read with [ppxml2db](https://github.com/pfalcon/ppxml2db) 
@@ -308,7 +283,7 @@ If your command makes sense for a broader audience, I'm happy to accept a [pull 
 
 In case you are experiencing any problems:
 1. Create an [anonymized version](#export) of your portfolio (verify!) or use the [kommer sample](tests/fixtures/kommer.toml)
-2. Add the `--verbose` option to the command that is causing the issue
+2. Add the `--verbose` option (or its synonym `--debug`) to the command that is causing the issue
 3. And [submit a new issue](https://github.com/ma4nn/pp-terminal/issues/new) and include the results from steps 1. and 2.
 
 ## License

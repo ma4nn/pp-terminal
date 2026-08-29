@@ -26,6 +26,7 @@ import pytest
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType, TransactionType
+from pp_terminal.utils.config import load_config
 from pp_terminal.validation.engine import validate_securities, ValidationResult
 
 _COLUMNS = ['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees', 'transferTargetAccount']
@@ -66,7 +67,7 @@ def provide_validation_results() -> dict[str, ValidationResult]:
 
     portfolio = Portfolio(accounts=accounts, transactions=transactions, securities=securities, prices=prices)
     snapshot = PortfolioSnapshot(portfolio, datetime(2023, 1, 1))
-    return validate_securities(portfolio, snapshot, {})
+    return validate_securities(portfolio, snapshot, load_config({}))
 
 
 def test_unlinked_transfer_is_flagged(validation_results: dict[str, ValidationResult]) -> None:
@@ -83,7 +84,7 @@ def test_empty_string_target_is_flagged(validation_results: dict[str, Validation
 
 def test_unlinked_transfer_is_warning_not_error(validation_results: dict[str, ValidationResult]) -> None:
     assert not validation_results['sec-unlinked'].has_errors
-    assert '⚠️' in validation_results['sec-unlinked'].messages
+    assert validation_results['sec-unlinked'].violations
 
 
 def test_properly_linked_transfer_is_not_flagged(validation_results: dict[str, ValidationResult]) -> None:

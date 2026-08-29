@@ -1,0 +1,32 @@
+name: Mutation Testing
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  mutation-test:
+    name: Mutation Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      UV_PYTHON: "3.14"
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: true
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        enable-cache: true
+
+    - name: Install Dependencies
+      run: make install ARGS="--locked"
+
+    - name: Run Mutation Tests
+      run: make test-mutations

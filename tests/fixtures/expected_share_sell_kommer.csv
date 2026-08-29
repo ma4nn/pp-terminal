@@ -1,2 +1,2 @@
-securityName,date,shares,currency,purchasePrice,costBasis,fees,salePrice,grossProceeds,capitalGain,deemedIncome,taxableGain,totalTax,netProceeds
-iShares Core Euro Government Bond UCITS ETF (Dist),2019-01-07,24.00,EUR,122.37,2946.83,9.95,110.40,2649.60,-297.23,0.00,0.00,0.00,2649.60
+securityName,isin,account,date,shares,currency,purchasePrice,costBasis,fees,salePrice,grossProceeds,capitalGain,deemedIncome,taxableGain,totalTax,netProceeds
+iShares Core Euro Government Bond UCITS ETF (Dist),IE00B4WXJJ64,Depot,2019-01-07,24.00,EUR,122.37,2946.83,9.95,110.40,2649.60,-297.23,0.00,0.00,0.00,2649.60

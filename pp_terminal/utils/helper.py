@@ -17,20 +17,15 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
-import logging
 from datetime import date
-from typing import List, Any, Callable
+from typing import List, Any
 
 import babel.numbers
 import pandas as pd
-import typer
 from babel import Locale
 from babel.numbers import format_currency
-from typer.models import CommandFunctionType
 
 from pp_terminal.domain.schemas import Money
-
-log = logging.getLogger(__name__)
 
 _PRECISION: int = 4
 
@@ -71,33 +66,8 @@ def format_percent(value: float) -> str:
     return f"{float(value) * 100:.2f}%"
 
 
-def enum_types_to_name(enum_list: List[Any]) -> List[Any]:
-    # prepare for enum storage in dataframe
-    for element in enum_list:
-        element['type'] = element['type'].name
-
-    return enum_list
-
-
 def enum_list_to_values(enum_list: List[Any]) -> List[Any]:
     return [item.value for item in enum_list]
-
-
-def run_all_group_cmds(app: typer.Typer) -> Callable[[CommandFunctionType], Callable[[typer.Context], CommandFunctionType]]:
-    def decorator(func: CommandFunctionType) -> Callable[[typer.Context], CommandFunctionType]:
-        def wrapper(ctx: typer.Context) -> Any:
-            invoked_command = ctx.invoked_subcommand
-            if ctx.invoked_subcommand is None:
-                for command in app.registered_commands:
-                    if command.callback is not None:
-                        ctx.invoked_subcommand = command.name
-                        log.debug('Running group command "%s"..', command.name)
-                        command.callback(ctx)
-            ctx.invoked_subcommand = invoked_command
-
-            return func(ctx)
-        return wrapper
-    return decorator
 
 
 def get_last_year() -> str:

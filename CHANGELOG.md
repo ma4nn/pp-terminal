@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-08-26
+
+### Added
+
+- Support for Portfolio Performance files saved as plain "XML" (without id attributes)
+- Support for the `BooleanConverter` attribute type
+- Start capital the withdrawal is based on in `simulate pmt`
+- `--debug` as a synonym for `--verbose`
+- Debug logging of the config and Portfolio Performance file paths actually used
+- `view accounts --inactive` and `view securities --inactive` to also list retired (inactive) entries
+- `view cash-flows` and the `query_cash_flows` MCP tool for deposits, withdrawals and net contributions per currency
+
+### Changed
+
+- Attribute columns are labelled with Portfolio Performance's column label instead of the longer attribute name
+  (e.g. `TER` instead of `Gesamtkostenquote (TER)`), which is also what `--fields` now matches
+- `view accounts` and `view securities` hide retired entries unless `--inactive` is passed;
+  `view securities --active` is gone, as is the `active_only` argument of the `query_securities` MCP tool
+- `simulate interest` json/csv keys are camelCase now: `meanBalance`, `simulatedInterest`, `actualInterest`
+
+### Fixed
+
+- `view accounts --fields` accepts an account attribute by uuid, not just by name
+- Errors raised by a command (e.g. a mistyped `--fields` value) print a message instead of a stack trace
+- Columns requested via `--fields` or the config file are no longer dropped from the table when they hold no values
+- Currency columns in `view accounts` no longer appear in a random order
+- `view accounts` lists accounts with a zero or negative balance and accounts without any transaction
+
+## [0.11.0] - 2026-07-09
+
+### Added 
+
+- Claude Code GitHub Workflow
+- Added possibility for plugins to define config toml
+- Validation for negative shares
+
+### Changed
+
+- Updated dependencies
+
+## [0.10.1] - 2026-04-14
+
+### Fixed 
+
+- Handle null property values in PP XML v69+
+
+### Changed
+
+- Updated dependencies
+
 ## [0.10.0] - 2026-02-11
 
 ### Added 
@@ -15,7 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Updated dependencies
-
 
 ## [0.9.0] - 2026-02-09
 

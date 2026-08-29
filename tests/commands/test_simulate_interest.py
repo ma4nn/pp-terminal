@@ -26,11 +26,12 @@ from _pytest.fixtures import TopRequest
 from pandas.testing import assert_frame_equal
 from pandera.typing import DataFrame
 
-from pp_terminal.commands.simulate_interest import calculate_interest
+from pp_terminal.commands.simulate_interest import calculate_interest, _format_value_wrapper
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
 from pp_terminal.domain.schemas import InterestResultSchema
+from pp_terminal.utils.helper import format_money
 
 
 def test_empty_portfolio() -> None:
@@ -43,30 +44,14 @@ def test_empty_portfolio() -> None:
     assert result.empty
 
 
-def test_no_deposit_accounts(sample_accounts: pd.DataFrame, sample_transactions: pd.DataFrame) -> None:
+def test_no_transactions_in_period(sample_accounts: pd.DataFrame, sample_transactions: pd.DataFrame) -> None:
     portfolio = Portfolio(accounts=sample_accounts, transactions=sample_transactions)
     snapshot_begin = PortfolioSnapshot(portfolio, datetime(2022, 1, 2))
     snapshot_end = PortfolioSnapshot(portfolio, datetime(2022, 12, 31))
 
     result = calculate_interest(snapshot_begin, snapshot_end, 2.3)
 
-    expected_df = InterestResultSchema.empty()
-
-    assert result is not None
-    assert_frame_equal(expected_df, result)
-
-
-def test_calculate_interest(sample_accounts: pd.DataFrame, sample_transactions: pd.DataFrame) -> None:
-    portfolio = Portfolio(accounts=sample_accounts, transactions=sample_transactions)
-    snapshot_begin = PortfolioSnapshot(portfolio, datetime(2022, 1, 2))
-    snapshot_end = PortfolioSnapshot(portfolio, datetime(2022, 12, 31))
-
-    result = calculate_interest(snapshot_begin, snapshot_end, 2.3)
-
-    expected_df = InterestResultSchema.empty()
-
-    assert result is not None
-    assert_frame_equal(expected_df, result)
+    assert_frame_equal(InterestResultSchema.empty(), result)
 
 
 def test_kommer(request: TopRequest) -> None:
@@ -77,7 +62,7 @@ def test_kommer(request: TopRequest) -> None:
     # Create expected DataFrame with type annotation and runtime validation
     expected_df: DataFrame[InterestResultSchema] = pd.DataFrame([
         ['Wertpapierkonto', 'EUR', 339.54724, 13.46723, np.nan],
-    ], columns=['name', 'currency', 'mean_balance', 'interest', 'actual_interest'])
+    ], columns=['name', 'currency', 'meanBalance', 'simulatedInterest', 'actualInterest'])
     expected_df.index = pd.Index(['e068fb14-2554-427e-b2d0-30dcc6e15717'], name='accountId')
     expected_df = InterestResultSchema.validate(expected_df)
 
@@ -101,3 +86,20 @@ def test_empty_file(request: TopRequest) -> None:
     # - Empty XML: Index([], dtype='object'), columns with dtype='object'
     # - Schema: Index([], dtype='str'), columns with StringDtype
     assert_frame_equal(expected_df, result, check_dtype=False, check_index_type=False)
+
+
+def _row(actual_interest: float) -> pd.Series:
+    return pd.Series({
+        'name': 'Testkonto', 'currency': 'EUR', 'meanBalance': 1000.0,
+        'simulatedInterest': 20.0, 'actualInterest': actual_interest,
+    })
+
+
+def test_actual_interest_is_colored_against_the_simulated_one() -> None:
+    """The comparison keys off the column names, so a rename must not silently drop the coloring."""
+    assert _format_value_wrapper(5.0, 'actualInterest', _row(5.0)).startswith('[red]')
+    assert _format_value_wrapper(25.0, 'actualInterest', _row(25.0)).startswith('[green]')
+
+
+def test_other_columns_are_not_colored() -> None:
+    assert _format_value_wrapper(1000.0, 'meanBalance', _row(5.0)) == format_money(1000.0, 'EUR')

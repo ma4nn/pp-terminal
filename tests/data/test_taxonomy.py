@@ -133,3 +133,30 @@ class TestPivotTaxonomyColumns:
 
         assert 'Asset Allocation' in result.columns
         assert result.loc['sec-1', 'Asset Allocation'] == 'Equities'
+
+    def test_id_column_absent_returns_df_unchanged(self) -> None:
+        df = pd.DataFrame({'foo': [1, 2]})
+        assignments = pd.DataFrame({
+            'itemId': ['sec-1'],
+            'itemType': ['security'],
+            'taxonomyName': ['Asset Allocation'],
+            'categoryName': ['Equities'],
+            'weight': [10000]
+        })
+
+        result = pivot_taxonomy_columns(df, assignments, 'securityId', 'security')
+
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_no_assignments_for_item_type_returns_df_unchanged(self, sample_df: pd.DataFrame) -> None:
+        assignments = pd.DataFrame({
+            'itemId': ['acc-1'],
+            'itemType': ['account'],
+            'taxonomyName': ['Asset Allocation'],
+            'categoryName': ['Cash'],
+            'weight': [10000]
+        })
+
+        result = pivot_taxonomy_columns(sample_df, assignments, 'securityId', 'security')
+
+        pd.testing.assert_frame_equal(result, sample_df)

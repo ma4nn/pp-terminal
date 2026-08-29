@@ -1,3 +1,4 @@
 [submodule "ppxml2db"]
 	path = ppxml2db
 	url = https://github.com/pfalcon/ppxml2db
+	ignore = dirty  # make install patches the submodule; without this, hatch-vcs sees a dirty tree and builds a dev version

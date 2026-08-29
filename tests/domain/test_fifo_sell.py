@@ -23,7 +23,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 from pp_terminal.data.filters import filter_by_security
-from pp_terminal.domain.cost_basis import calculate_fifo_sell
+from pp_terminal.domain.cost_basis import SellContext, calculate_fifo_sell
 
 from pp_terminal.exceptions import InputError
 from pp_terminal.domain.portfolio import Portfolio
@@ -69,7 +69,7 @@ def test_fifo_lots_single_purchase(share_sell_portfolio: Portfolio) -> None:
     snapshot = PortfolioSnapshot(share_sell_portfolio, datetime(2024, 12, 31))
 
     transactions = snapshot.securities_account_transactions.pipe(filter_by_security, security_id='sec1')
-    lots = calculate_fifo_sell(transactions, datetime(2024, 12, 31), shares_to_sell=30.0, sell_price=160.0, tax_rate=26.375)
+    lots = calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 160.0, 26.375), shares_to_sell=30.0)
 
     assert len(lots) == 1
     assert lots.iloc[0]['shares'] == pytest.approx(30.0)
@@ -82,12 +82,25 @@ def test_fifo_lots_single_purchase(share_sell_portfolio: Portfolio) -> None:
     assert lots.iloc[0]['netProceeds'] == pytest.approx(4325.25)  # 4800 - 474.75
 
 
+def test_fractional_purchase_lot() -> None:
+    transactions = pd.DataFrame([
+        [datetime(2022, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, 50.0, 0.5, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],  # €100/share
+    ], columns=['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees']).set_index(['date', 'accountId', 'securityId'])
+
+    lots = calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 120.0, 26.375), shares_to_sell=0.5)
+
+    assert len(lots) == 1
+    assert lots.iloc[0]['shares'] == pytest.approx(0.5)
+    assert lots.iloc[0]['costBasis'] == pytest.approx(50.0)
+    assert lots.iloc[0]['capitalGain'] == pytest.approx(10.0)  # 0.5 * (120 - 100)
+
+
 def test_fifo_lots_multiple_purchases(share_sell_portfolio: Portfolio) -> None:
     """Test FIFO when selling shares across multiple purchases."""
     # Sell 120 shares: 50 from first purchase, 50 from second, 20 from third
     snapshot = PortfolioSnapshot(share_sell_portfolio, datetime(2024, 12, 31))
     transactions = snapshot.securities_account_transactions.pipe(filter_by_security, security_id='sec1')
-    lots = calculate_fifo_sell(transactions, datetime(2024, 12, 31), shares_to_sell=120.0, sell_price=160.0, tax_rate=26.375)
+    lots = calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 160.0, 26.375), shares_to_sell=120.0)
 
     assert len(lots) == 3
 
@@ -123,4 +136,4 @@ def test_fifo_lots_insufficient_shares(share_sell_portfolio: Portfolio) -> None:
     transactions = snapshot.securities_account_transactions.pipe(filter_by_security, security_id='sec1')
 
     with pytest.raises(InputError, match="Insufficient shares"):
-        calculate_fifo_sell(transactions, datetime(2024, 12, 31), shares_to_sell=200.0, sell_price=160.0, tax_rate=26.375)
+        calculate_fifo_sell(transactions, SellContext(datetime(2024, 12, 31), 160.0, 26.375), shares_to_sell=200.0)

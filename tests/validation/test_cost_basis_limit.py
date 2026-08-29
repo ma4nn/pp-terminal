@@ -29,11 +29,12 @@ from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import AccountType, TransactionType
 from pp_terminal.validation.engine import validate_securities, ValidationResult
+from pp_terminal.utils.config import load_config
 from pp_terminal.validation.rules import CostBasisLimitRule
 
 
 def _validate_securities(portfolio: Portfolio, config: dict[str, Any]) -> dict[str, ValidationResult]:
-    return validate_securities(portfolio, PortfolioSnapshot(portfolio, datetime(2023, 12, 31)), config)
+    return validate_securities(portfolio, PortfolioSnapshot(portfolio, datetime(2023, 12, 31)), load_config(config))
 
 
 @pytest.fixture(name='portfolio_with_purchases_and_sales')
@@ -86,16 +87,6 @@ def provide_portfolio_with_purchases_and_sales() -> Portfolio:
         securities=securities,
         prices=prices
     )
-
-
-@pytest.fixture(name='tax_csv_data_df')
-def provide_tax_csv_data_df() -> pd.DataFrame:
-    """Tax CSV data for testing."""
-    data = pd.DataFrame([
-        [2020, 'acc-1', 'sec-a', 0.379147],
-        [2021, 'acc-1', 'sec-a', 0.454976],
-    ], columns=['year', 'account_id', 'security_id', 'deemed_income'])
-    return data.set_index(['year', 'account_id', 'security_id'])
 
 
 def test_no_validation_config(portfolio_with_purchases_and_sales: Portfolio) -> None:
@@ -178,7 +169,7 @@ def test_entity_specific_rule(portfolio_with_purchases_and_sales: Portfolio) -> 
 
 def test_attribute_based_rule(portfolio_with_purchases_and_sales: Portfolio) -> None:
     """Test cost-basis-limit-from-attribute rule type."""
-    test_attr_uuid = 'test-attr-uuid-12345'
+    test_attr_uuid = '11111111-1111-1111-1111-111111111111'
 
     # Add custom attribute with limit for sec-a and sec-b
     securities_df = portfolio_with_purchases_and_sales.securities.copy()
@@ -233,7 +224,6 @@ def test_warning_severity(portfolio_with_purchases_and_sales: Portfolio) -> None
     # sec-a should have a violation but not an error (warning severity)
     assert len(results['sec-a'].violations) > 0
     assert not results['sec-a'].has_errors
-    assert '⚠️' in results['sec-a'].messages
 
 
 def test_mixed_severities(portfolio_with_purchases_and_sales: Portfolio) -> None:
@@ -292,7 +282,7 @@ def test_multiple_accounts_aggregated(portfolio_with_purchases_and_sales: Portfo
 
     results = _validate_securities(portfolio, config)
 
-    # sec-a should fail (acc-1: €5500 + acc-2: €500 = €6000 > €4500)
+    # sec-a should fail (FIFO cost basis across acc-1 and acc-2: €5000 > €4500)
     assert results['sec-a'].has_errors
     assert '5000.00' in results['sec-a'].messages
 

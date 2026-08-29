@@ -32,6 +32,15 @@ def _percent_plain_converter(value: Any) -> float:
     return float(value) / 100
 
 
+def _boolean_converter(value: Any) -> bool:
+    """Convert the "true"/"false" XStream writes for a java.lang.Boolean attribute."""
+    booleans = {'true': True, 'false': False}
+    try:
+        return booleans[str(value).strip().lower()]
+    except KeyError as e:
+        raise ValueError(f'"{value}" is neither "true" nor "false"') from e
+
+
 CONVERTER_DISPATCH: Dict[str, Callable[[Any], Any]] = {
     'DateConverter': pd.to_datetime,
     'PercentPlainConverter': _percent_plain_converter,
@@ -40,6 +49,7 @@ CONVERTER_DISPATCH: Dict[str, Callable[[Any], Any]] = {
     'AmountConverter': float,
     'StringConverter': str,
     'AmountPlainConverter': int,
+    'BooleanConverter': _boolean_converter,
 }
 
 

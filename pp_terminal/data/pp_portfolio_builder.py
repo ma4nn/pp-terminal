@@ -19,7 +19,6 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -27,6 +26,7 @@ from pandera.typing import DataFrame
 
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.schemas import TransactionSchema, AccountSchema, SecuritySchema, SecurityPriceSchema, TransactionType, Attribute, Taxonomy
+from pp_terminal.exceptions import InputError
 from pp_terminal.utils.cache import cleanup_old_cache_files, get_cache_path
 from pp_terminal.utils.helper import enum_list_to_values
 from .attribute_type_converter import convert_attribute_types, get_converter_column_name
@@ -50,11 +50,9 @@ _ATTRIBUTE_TYPE_SECURITY = 'name.abuchen.portfolio.model.Security'
 
 class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
     _db: Ppxml2dbWrapper
-    _config: Dict[str, Any]
 
-    def __init__(self, db: Ppxml2dbWrapper | None = None, config: Dict[str, Any] | None = None):
+    def __init__(self, db: Ppxml2dbWrapper | None = None):
         self._db = db if db is not None else Ppxml2dbWrapper(dbname=DB_NAME_IN_MEMORY)
-        self._config = config if config is not None else {}
 
     def construct(self, file: Path) -> Portfolio:
         self._db.open(file)
@@ -76,9 +74,14 @@ class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             taxonomy_assignments = taxonomy_assignments
         )
 
-        portfolio.base_currency = str(self._get_property('baseCurrency'))
+        base_currency = self._get_property('baseCurrency')
 
         self._db.close()
+
+        if base_currency is None:
+            raise InputError('missing baseCurrency property in the Portfolio Performance xml file "' + file.name + '"')
+
+        portfolio.base_currency = base_currency
 
         return portfolio
 
@@ -92,6 +95,7 @@ class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             case_statements.append(f'MAX(CASE WHEN at.id = ? THEN at.converterClass END) AS "{get_converter_column_name(attr_uuid)}"')
             params.append(attr_uuid)
 
+        # B608 false positive: case_statements contain only column names; values are bound via ? placeholders
         sql = f"""
             select s.*,
                 {', '.join(case_statements) if case_statements else '""'}
@@ -99,7 +103,7 @@ class PpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             left join security_attr as sa on sa."security" = s.uuid
             left join attribute_type as at on sa.attr_uuid = at.id
             group by s.uuid
-        """  # nosec B608 - case_statements contain only column names with ? placeholders, data passed via params
+        """  # nosec
 
         securities = pd.read_sql_query(sql, self._db.connection, index_col='uuid', params=params).rename_axis('securityId')
         securities = convert_attribute_types(securities, security_attrs)
@@ -144,6 +148,7 @@ left join xact_cross_entry as ce on ce.from_xact = x.uuid and ce.type = 'portfol
             case_statements.append(f'MAX(CASE WHEN at.id = ? THEN at.converterClass END) AS "{get_converter_column_name(attr_uuid)}"')
             params.append(attr_uuid)
 
+        # B608 false positive: case_statements contain only column names; values are bound via ? placeholders
         sql = f"""
             select a.*,
                 {', '.join(case_statements) if case_statements else '""'}
@@ -151,7 +156,7 @@ left join xact_cross_entry as ce on ce.from_xact = x.uuid and ce.type = 'portfol
             left join account_attr as aa on aa."account" = a.uuid
             left join attribute_type as at on aa.attr_uuid = at.id
             group by a.uuid
-        """  # nosec B608 - case_statements contain only column names with ? placeholders, data passed via params
+        """  # nosec
 
         accounts = (pd.read_sql_query(sql, self._db.connection, index_col='uuid', params=params)
                           .rename_axis('accountId'))
@@ -191,17 +196,12 @@ left join xact_cross_entry as ce on ce.from_xact = x.uuid and ce.type = 'portfol
 
     def _get_attributes(self, entity: str) -> dict[str, Attribute]:
         cursor = self._db.connection.cursor()
-        cursor.execute("SELECT id, name, converterClass FROM attribute_type WHERE target = ? AND id NOT IN ('logo')", (entity, ))
+        cursor.execute("SELECT id, name, converterClass, columnLabel FROM attribute_type WHERE target = ? AND id NOT IN ('logo')", (entity, ))
 
-        return {str(row[0]): Attribute(uuid=str(row[0]), name=str(row[1]), converter=str(row[2])) for row in cursor.fetchall()}
+        return {str(row[0]): Attribute(uuid=str(row[0]), name=str(row[1]), converter=str(row[2]), label=str(row[3])) for row in cursor.fetchall()}
 
 
 class CachedPpPortfolioBuilder:  # pylint: disable=too-few-public-methods
-    _config: Dict[str, Any]
-
-    def __init__(self, config: Dict[str, Any] | None = None):
-        self._config = config if config is not None else {}
-
     def construct(self, file: Path) -> Portfolio:
         use_cache_file = False
 
@@ -224,7 +224,7 @@ class CachedPpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             cache_path = None
             use_cache_file = False
 
-        builder = PpPortfolioBuilder(db, self._config)
+        builder = PpPortfolioBuilder(db)
 
         # Override the open behavior for cache hits
         if use_cache_file:

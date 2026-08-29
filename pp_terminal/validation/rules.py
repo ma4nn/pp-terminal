@@ -18,20 +18,51 @@
 """
 
 from datetime import datetime
-from typing import Any, cast
+from typing import Annotated, Any, Literal, cast
 import logging
 import pandas as pd
+from pydantic import Field
 
 from pp_terminal.data.filters import filter_by_security
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import TransactionType
+from pp_terminal.utils.config import Config, ConfigModel, UUIDStr
 from pp_terminal.validation.base import ValidationRule
 from pp_terminal.validation.vap_liquidity_rule import VapLiquidityRule
 from pp_terminal.validation.paid_tax_validation_rule import PaidTaxValidationRule
 
 log = logging.getLogger(__name__)
+
+
+class _RuleConfig(ConfigModel):
+    value: float | UUIDStr | None = None
+    severity: Literal['warning', 'error'] = 'error'
+    applies_to: Annotated[list[str], Field(min_length=1)] | None = None
+    valid_months: list[Annotated[int, Field(ge=1, le=12)]] | None = None
+
+
+class AccountRuleConfig(_RuleConfig):
+    type: Literal['balance-limit', 'balance-limit-from-attribute', 'date-passed-from-attribute', 'vap-liquidity']
+
+
+class SecurityRuleConfig(_RuleConfig):
+    type: Literal['price-staleness', 'price-limit', 'price-limit-from-attribute', 'cost-basis-limit', 'cost-basis-limit-from-attribute', 'paid-tax-validation', 'negative-share-balance', 'unlinked-depot-transfer']
+    tolerance: float = Field(0.0, ge=0)
+
+
+class _AccountRulesConfig(ConfigModel):
+    rules: list[AccountRuleConfig] = []
+
+
+class _SecurityRulesConfig(ConfigModel):
+    rules: list[SecurityRuleConfig] = []
+
+
+class ValidateConfig(ConfigModel):
+    accounts: _AccountRulesConfig = Field(default_factory=_AccountRulesConfig)
+    securities: _SecurityRulesConfig = Field(default_factory=_SecurityRulesConfig)
 
 
 class BalanceLimitRule(ValidationRule):
@@ -148,7 +179,7 @@ class NegativeShareBalanceRule(ValidationRule):
     are not supported by Portfolio Performance."""
 
     @classmethod
-    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: dict[str, Any]) -> dict[str, Any]:
+    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: Config) -> dict[str, Any]:
         # share counts are currency-independent, so net out forex/native transaction legs
         balances = snapshot.share_balances.groupby(['accountId', 'securityId']).sum()
         return {
@@ -184,7 +215,7 @@ class UnlinkedDepotTransferRule(ValidationRule):
     source account instead of the destination."""
 
     @classmethod
-    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: dict[str, Any]) -> dict[str, Any]:
+    def provide_context(cls, portfolio: Portfolio, snapshot: PortfolioSnapshot, config: Config) -> dict[str, Any]:
         transactions = portfolio.securities_account_transactions
         transfer_outs = transactions[transactions['type'] == TransactionType.TRANSFER_OUT.name]
         if 'transferTargetAccount' not in transfer_outs.columns:
@@ -240,20 +271,20 @@ _RULE_TYPES = {
 }
 
 
-def create_rule(rule_config: dict[str, Any]) -> ValidationRule:
-    rule_type = rule_config['type']
-    if rule_type not in _RULE_TYPES:
-        raise ValueError(f'Unknown rule type: {rule_type}')
+def known_rule_types() -> set[str]:
+    return set(_RULE_TYPES)
 
-    rule_class = _RULE_TYPES[rule_type]
+
+def create_rule(rule_config: AccountRuleConfig | SecurityRuleConfig) -> ValidationRule:
+    rule_class = _RULE_TYPES[rule_config.type]
 
     return rule_class(  # type: ignore[abstract]
-        rule_type=rule_type,
-        value=rule_config.get('value', None),
-        severity=rule_config.get('severity', 'error'),
-        applies_to=rule_config.get('applies-to', None),
-        valid_months=rule_config.get('valid-months', None),
-        tolerance=rule_config.get('tolerance', 0.0)
+        rule_type=rule_config.type,
+        value=rule_config.value,
+        severity=rule_config.severity,
+        applies_to=rule_config.applies_to,
+        valid_months=rule_config.valid_months,
+        tolerance=getattr(rule_config, 'tolerance', 0.0)
     )
 
 

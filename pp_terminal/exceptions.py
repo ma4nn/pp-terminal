@@ -20,5 +20,6 @@
 class InputError(Exception):
     pass
 
-class ValidationError(Exception):
+
+class ConfigValidationError(Exception):
     pass

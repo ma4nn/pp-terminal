@@ -17,7 +17,7 @@ In this repo, after every code edit you make, run `make check` and at least any 
 
 - The original Portfolio Performance XML file may NEVER be written to
 - pylint code quality MUST be 10/10
-- If config format changes, adapt `config.schema.json` and `README.md` accordingly
+- If config format changes, adapt the Pydantic config models (in `utils/config.py` and the command modules), the `CONFIG_TEMPLATE` annotated reference in `commands/init.py` (a test validates it against the models), and `README.md` accordingly
 - Never use `pylint: disable=protected-access` in tests
 - Attention to properly use the correct financial terms for naming variables/methods/classes/files 
 - Do NOT care about backwards compatibility unless explicitly stated (just leave a notice)
@@ -38,7 +38,6 @@ The codebase follows a layered architecture for clarity and maintainability:
 pp_terminal/
 ├── main.py                      # CLI entry point
 ├── exceptions.py                # Global exceptions
-├── config.schema.json           # Config schema
 │
 ├── domain/                      # Core business logic (no external dependencies)
 ├── data/                        # Data loading & transformation
@@ -62,7 +61,8 @@ Additional top-level modules (e.g. an MCP server) may live alongside `main.py`; 
 ### Setup and Build
 ```bash
 make                    # Full build: install, check, test, build
-make install            # Install dependencies via poetry and apply ppxml2db patch
+make install            # Install dependencies via uv and apply ppxml2db patch
+make build              # Install dependencies, then build the distribution (no checks/tests)
 make clean              # Remove build artifacts
 ```
 
@@ -72,30 +72,36 @@ To update the ppxml2db submodule run:
 git submodule update --remote
 ```
 
+After updating, re-check which tags ppxml2db reads an `id` attribute from and keep `ID_TAGS`
+(`data/xml_id_reference_converter.py`) in sync — a tag missing there makes those entities vanish from the
+database without any error. Most of them are not covered by the fixtures, so only `PPXML2DB_ID_TAGS` in
+`tests/data/test_xml_id_reference_converter.py` guards this.
+
 ### Testing
 ```bash
 make test               # Run pytest test suite
-poetry run pytest       # Run pytest directly
+uv run pytest           # Run pytest directly
 ```
 
 Test fixtures are in `tests/fixtures/` with sample Portfolio Performance XML files.
 
 ### Code Quality
 ```bash
-make check              # Run all checks: poetry check, pylint, bandit, mypy
-poetry run pylint pp_terminal tests
-poetry run bandit -c bandit.yaml -r pp_terminal tests
-poetry run mypy .
+make check              # Run all checks: uv lock --check, pylint, bandit, mypy
+uv run pylint pp_terminal tests
+uv run bandit -c bandit.yaml -r pp_terminal tests
+uv run mypy .
 ```
 
 ### Running Locally
 ```bash
-poetry run pp-terminal --version
-poetry run pp-terminal --file=depot.xml view accounts
-poetry run pp-terminal --file=depot.xml --debug view accounts  # Debug mode with SQLite cache
+uv run pp-terminal --version
+uv run pp-terminal --file=depot.xml view accounts
+uv run pp-terminal --file=depot.xml --verbose view accounts  # or --debug, a synonym
 ```
 
-Debug mode creates `.cache.db` for inspection.
+`--verbose`/`--debug` enable debug logging and let the original exception surface instead of a plain abort.
+`--cache` (the default) writes a `.<xml-stem>.<checksum>.pp-terminal.db` sqlite file next to the xml.
 
 ## Architecture
 
@@ -152,6 +158,8 @@ Main app structure (`main.py`):
 
 The XML format used by Portfolio Performance is nothing but internal serialization format of 3rd-party library [XStream](https://x-stream.github.io/). 
 
+Both XStream reference flavors are accepted: files saved as "XML with id attributes" go straight to ppxml2db, while the default "XML" flavor (relative path references) is normalized in memory by `data/xml_id_reference_converter.py` first.
+
 ### Output System
 
 `pp_terminal/output/` implements the strategy pattern: one strategy class per supported format, selected via factory. Add a new format by adding a strategy module and registering it in the factory.
@@ -173,7 +181,7 @@ The Portfolio Performance XML stores amounts as cents and shares/prices scaled b
 ## Configuration
 
 - Python >=3.13 required
-- Uses Poetry for dependency management
+- Uses uv for dependency management
 - Main dependencies: typer, pandas, rich, pandera, lxml
 - Dev dependencies: pylint, pytest, mypy, bandit
 

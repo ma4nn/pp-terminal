@@ -25,7 +25,9 @@ import pandas as pd
 from _pytest.fixtures import TopRequest
 from pandas.testing import assert_frame_equal
 
+from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
+from pp_terminal.domain.schemas import AccountType, TransactionType
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
 from pp_terminal.commands.view_accounts import calculate_securities_accounts_sum
 
@@ -59,3 +61,57 @@ def test_empty_file(request: TopRequest) -> None:
     assert 'name' in result.columns
     assert 'type' in result.columns
     assert 'balance' in result.columns
+
+
+def _portfolio_with_empty_and_sold_out_accounts() -> Portfolio:
+    accounts = pd.DataFrame([
+        ['Untouched depot', AccountType.SECURITIES.value, None, False, None],
+        ['Sold out depot', AccountType.SECURITIES.value, None, False, None],
+        ['Retired depot', AccountType.SECURITIES.value, None, True, None],
+    ], columns=['name', 'type', 'referenceAccount', 'isRetired', 'currency'], index=['acc-1', 'acc-2', 'acc-3'])
+    accounts.index.name = 'accountId'
+
+    securities = pd.DataFrame([
+        ['Test Security', 'XXX', 'ISIN123', False, 'EUR'],
+    ], columns=['name', 'wkn', 'isin', 'isRetired', 'currency'], index=['sec-1'])
+    securities.index.name = 'securityId'
+
+    transactions = pd.DataFrame([
+        [datetime(2020, 1, 15), 'acc-2', 'sec-1', TransactionType.BUY.value, -1000.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        [datetime(2020, 6, 20), 'acc-2', 'sec-1', TransactionType.SELL.value, 1200.0, 10.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+        [datetime(2020, 1, 15), 'acc-3', 'sec-1', TransactionType.BUY.value, -500.0, 5.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+    ], columns=['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees']
+    ).set_index(['date', 'accountId', 'securityId'])
+
+    prices = pd.DataFrame([
+        [100.0],
+    ], columns=['price'], index=pd.MultiIndex.from_tuples([(pd.Timestamp('2020-01-15'), 'sec-1')], names=['date', 'securityId']))
+
+    portfolio = Portfolio(accounts=accounts, transactions=transactions, securities=securities, prices=prices)
+    portfolio.base_currency = 'EUR'
+
+    return portfolio
+
+
+def test_securities_account_without_transactions_is_listed_with_zero_value() -> None:
+    result = calculate_securities_accounts_sum(PortfolioSnapshot(_portfolio_with_empty_and_sold_out_accounts()))
+
+    assert result.loc[('acc-1', 'EUR'), 'balance'] == 0.0
+
+
+def test_securities_account_with_closed_positions_only_is_listed_with_zero_value() -> None:
+    result = calculate_securities_accounts_sum(PortfolioSnapshot(_portfolio_with_empty_and_sold_out_accounts()))
+
+    assert result.loc[('acc-2', 'EUR'), 'balance'] == 0.0
+
+
+def test_retired_securities_accounts_are_hidden_by_default() -> None:
+    result = calculate_securities_accounts_sum(PortfolioSnapshot(_portfolio_with_empty_and_sold_out_accounts()))
+
+    assert set(result.index.get_level_values('accountId')) == {'acc-1', 'acc-2'}
+
+
+def test_retired_securities_accounts_are_listed_when_inactive_included() -> None:
+    result = calculate_securities_accounts_sum(PortfolioSnapshot(_portfolio_with_empty_and_sold_out_accounts()), include_inactive=True)
+
+    assert result.loc[('acc-3', 'EUR'), 'balance'] == 500.0

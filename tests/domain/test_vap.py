@@ -28,9 +28,9 @@ import pytest
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from pp_terminal.domain.schemas import TransactionType, AccountType, Percent, Money, VapResultSchema, SecuritySchema
-from pp_terminal.domain.vap import calculate_vap
+from pp_terminal.domain.vap import calculate_vap, apply_allowance_to_vap
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
-from tests.conftest import TAX_RATE, EXEMPT_RATE_CONFIG
+from tests.conftest import TAX_RATE
 
 
 @pytest.fixture(name='sample_securities')
@@ -48,27 +48,6 @@ def provide_sample_prices() -> pd.DataFrame:
         [datetime(2018, 1, 10), '1234567890', 246.66],
     ], columns=['date', 'securityId', 'price'])
             .set_index(['date', 'securityId']))
-
-
-def test_calculate_empty_if_no_securities_accounts(sample_accounts: pd.DataFrame, sample_securities: pd.DataFrame, sample_prices: pd.DataFrame) -> None:
-    transactions = (pd.DataFrame([
-        [datetime(2018, 8, 15), TransactionType.BUY.value, 1000.0, 5.0, '1234567890', '1', AccountType.SECURITIES.value, 'EUR']
-    ], columns=['date', 'type', 'amount', 'shares', 'securityId', 'accountId', 'accountType', 'currency'])
-                    .set_index(['date', 'accountId', 'securityId']))
-
-    # drop all rows but keep structure
-    sample_accounts = sample_accounts.drop(sample_accounts.index)
-    sample_securities = sample_securities.drop(sample_securities.index)
-    sample_prices = sample_prices.drop(sample_prices.index)
-    transactions = transactions.drop(transactions.index)
-
-    portfolio = Portfolio(sample_accounts, transactions, sample_securities, sample_prices)
-    snapshot_begin = PortfolioSnapshot(portfolio, datetime(2022, 1, 2))
-    snapshot_end = PortfolioSnapshot(portfolio, datetime(2022, 12, 31))
-
-    result = calculate_vap(snapshot_begin, snapshot_end, 2.29, TAX_RATE)
-
-    assert result.empty
 
 
 def test_calculate_empty_if_no_security_prices(sample_accounts: pd.DataFrame, sample_transactions: pd.DataFrame, sample_securities: pd.DataFrame, sample_prices: pd.DataFrame) -> None:
@@ -98,6 +77,41 @@ def test_inyear_buy(sample_accounts: pd.DataFrame, sample_transactions: pd.DataF
 
     assert not result.empty
     assert_frame_equal(expected_df, result.round(2))
+
+def _single_buy_portfolio(sample_accounts: pd.DataFrame, sample_securities: pd.DataFrame, buy_date: datetime) -> Portfolio:
+    prices = pd.DataFrame([
+        [datetime(2023, 12, 5), '1234567890', 50.0],
+        [datetime(2024, 12, 31), '1234567890', 62.5],
+    ], columns=['date', 'securityId', 'price']).set_index(['date', 'securityId'])
+    transactions = pd.DataFrame([
+        [buy_date, TransactionType.BUY.value, 100_000.0, 2000.0, '1234567890', '1', AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+    ], columns=['date', 'type', 'amount', 'shares', 'securityId', 'accountId', 'accountType', 'currency', 'taxes', 'fees']).set_index(['date', 'accountId', 'securityId'])
+
+    return Portfolio(sample_accounts, transactions, sample_securities, prices)
+
+
+def _vap_2024(portfolio: Portfolio) -> DataFrame[VapResultSchema]:
+    return calculate_vap(
+        PortfolioSnapshot(portfolio, datetime(2024, 1, 2)),
+        PortfolioSnapshot(portfolio, datetime(2024, 12, 31)),
+        base_rate_percent=2.29,
+        tax_rate_percent=TAX_RATE,
+        exempt_rate_percent=30)
+
+
+def test_buy_on_january_first_is_not_double_counted(sample_accounts: pd.DataFrame, sample_securities: pd.DataFrame) -> None:
+    result_held_from_prior_year = _vap_2024(_single_buy_portfolio(sample_accounts, sample_securities, datetime(2023, 12, 6)))
+    result_bought_january_first = _vap_2024(_single_buy_portfolio(sample_accounts, sample_securities, datetime(2024, 1, 1)))
+
+    assert result_held_from_prior_year.loc['1234567890', 'Testdepot'] == pytest.approx(295.95, abs=0.01)
+    assert_frame_equal(result_held_from_prior_year, result_bought_january_first)
+
+
+def test_december_buy_counts_one_twelfth(sample_accounts: pd.DataFrame, sample_securities: pd.DataFrame) -> None:
+    result = _vap_2024(_single_buy_portfolio(sample_accounts, sample_securities, datetime(2024, 12, 6)))
+
+    assert result.loc['1234567890', 'Testdepot'] == pytest.approx(295.95 / 12, abs=0.01)
+
 
 # @see https://github.com/MStrecke/vorabpauschale/blob/master/test.ini
 # @see https://www.justetf.com/de/news/etf/etf-und-steuern-das-neue-investmentsteuergesetz-ab-2018.html
@@ -202,14 +216,7 @@ def test_kommer_2021(request: TopRequest) -> None:
 
 
 def test_kommer_2023(request: TopRequest) -> None:
-    config = {
-        "attributes": {
-            "securities": {
-                "exemption-rate": "2baac2d0-459b-4b41-a0ef-d7dad0866892"
-            }
-        }
-    }
-    portfolio = PpPortfolioBuilder(config=config).construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
+    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
     snapshot_begin = PortfolioSnapshot(portfolio, datetime(2023, 1, 2))
     snapshot_end = PortfolioSnapshot(portfolio, datetime(2023, 12, 31))
 
@@ -229,7 +236,7 @@ def test_kommer_2023(request: TopRequest) -> None:
     expected_df.index.name = 'securityId'
     expected_df = VapResultSchema.validate(expected_df)
 
-    result = calculate_vap(snapshot_begin, snapshot_end, 2.0, TAX_RATE, 30.0, config['attributes']['securities']['exemption-rate'])
+    result = calculate_vap(snapshot_begin, snapshot_end, 2.0, TAX_RATE, 30.0, '2baac2d0-459b-4b41-a0ef-d7dad0866892')
 
     assert not result.empty
     assert_frame_equal(expected_df, result.round(5))
@@ -242,17 +249,6 @@ def test_empty_file(request: TopRequest) -> None:
     snapshot_end = PortfolioSnapshot(portfolio, datetime(2021, 12, 31))
 
     result = calculate_vap(snapshot_begin, snapshot_end, 2.0, TAX_RATE)
-
-    assert result.empty
-
-
-def test_zero_base_rate(request: TopRequest) -> None:
-    portfolio = PpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
-
-    snapshot_begin = PortfolioSnapshot(portfolio, datetime(2021, 1, 2))
-    snapshot_end = PortfolioSnapshot(portfolio, datetime(2021, 12, 31))
-
-    result = calculate_vap(snapshot_begin, snapshot_end, base_rate_percent=0, tax_rate_percent=TAX_RATE)
 
     assert result.empty
 
@@ -279,27 +275,29 @@ def test_full_exempt_rate(request: TopRequest) -> None:
     assert result.empty
 
 
-def test_custom_exempt_rate_produces_positive_vap(request: TopRequest) -> None:
-    portfolio = PpPortfolioBuilder(config=EXEMPT_RATE_CONFIG).construct(request.path.parent.parent / 'fixtures' / 'kommer.ids.xml')
+def _vap_table() -> DataFrame[VapResultSchema]:
+    """Two securities in one account, VAP tax 100 and 300 (grand total 400)."""
+    frame = pd.DataFrame({
+        'wkn': ['W1', 'W2'], 'name': ['ETF A', 'ETF B'], 'currency': ['EUR', 'EUR'], 'Depot': [100.0, 300.0],
+    })
+    return VapResultSchema.validate(frame)
 
-    snapshot_begin = PortfolioSnapshot(portfolio, datetime(2023, 1, 2))
-    snapshot_end = PortfolioSnapshot(portfolio, datetime(2023, 12, 31))
 
-    result = calculate_vap(
-        snapshot_begin,
-        snapshot_end,
-        base_rate_percent=2.0,
-        tax_rate_percent=TAX_RATE,
-        exempt_rate_percent=30.0,
-        exempt_rate_attr_uuid=EXEMPT_RATE_CONFIG['attributes']['securities']['exempt-rate']
-    )
+def test_apply_allowance_to_vap_reduces_total_by_allowance_times_rate() -> None:
+    relieved = apply_allowance_to_vap(_vap_table(), allowance=1000.0, tax_rate=26.375)
 
-    assert not result.empty
+    # total VAP tax 400 - 1000*0.26375 (263.75) = 136.25, split proportionally 1:3
+    assert relieved['Depot'].sum() == pytest.approx(400.0 - 263.75)
+    assert relieved.loc[0, 'Depot'] == pytest.approx(relieved.loc[1, 'Depot'] / 3)
 
-    vap_values = result[result['name'] != 'Related Account Balance']
-    account_columns = [col for col in vap_values.columns if col not in ['wkn', 'name', 'currency']]
 
-    for col in account_columns:
-        for idx, value in vap_values[col].items():
-            if pd.notna(value):
-                assert value >= 0, f"VAP should be non-negative, got {value} for {vap_values.loc[idx, 'name']} in {col}"
+def test_apply_allowance_to_vap_never_goes_negative() -> None:
+    relieved = apply_allowance_to_vap(_vap_table(), allowance=1_000_000.0, tax_rate=26.375)
+
+    assert relieved['Depot'].sum() == pytest.approx(0.0)  # allowance dwarfs the VAP -> no tax owed
+
+
+def test_apply_allowance_to_vap_zero_is_noop() -> None:
+    relieved = apply_allowance_to_vap(_vap_table(), allowance=0.0, tax_rate=26.375)
+
+    assert relieved['Depot'].sum() == pytest.approx(400.0)

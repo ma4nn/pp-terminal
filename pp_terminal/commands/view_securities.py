@@ -19,34 +19,38 @@
 
 import logging
 from datetime import datetime
-from typing import cast, Callable, Any
+from typing import Annotated, cast
 
 import typer
 import pandas as pd
-from pp_terminal.data.filters import clean_for_display, filter_by_security, pivot_taxonomy_columns
+from pp_terminal.data.filters import clean_for_display, filter_by_security, pivot_taxonomy_columns, retired_row_labels
 from pp_terminal.domain.cost_basis import calculate_total_cost_basis
 from pp_terminal.domain.vap import calculate_vap_by_security
 from pp_terminal.output.column_utils import normalize_columns
-from pp_terminal.utils.config import Config, get_tax_rate, get_exempt_rate, get_exempt_rate_attribute
+from pp_terminal.utils.config import Config, ConfigModel, command_config
 from pp_terminal.utils.helper import footer
 from pp_terminal.output.strategy import OutputStrategy, Console
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
-from pp_terminal.output.table_decorator import TableOptions, format_value
-from pp_terminal.validation.engine import validate_securities, ValidationResult
-from pp_terminal.utils.config import get_command_config
-from pp_terminal.domain.schemas import Attribute
+from pp_terminal.output.table_decorator import TableOptions, attribute_value_formatter, percent_attribute_columns
+from pp_terminal.commands.message_column import messages_renderer
+from pp_terminal.validation.engine import validate_securities
 
 app = typer.Typer()
 console = Console()
 log = logging.getLogger(__name__)
 
 
-def prepare_securities_df(
+class ViewSecuritiesConfig(ConfigModel):
+    fields: list[str] | None = None
+
+
+def prepare_securities_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     portfolio: Portfolio,
     config: Config,
+    output: OutputStrategy,
     by: datetime,
-    active: bool = False,
+    include_inactive: bool = False,
     in_stock: bool = False
 ) -> pd.DataFrame:
     securities = portfolio.securities
@@ -65,16 +69,14 @@ def prepare_securities_df(
     latest_prices = snapshot.latest_prices.rename('latestPrice')
     df = df.merge(latest_prices, left_on='securityId', right_index=True, how='left')
 
-    if active and 'isRetired' in df.columns:
+    if not include_inactive and 'isRetired' in df.columns:
         df = df[~df['isRetired']]
 
     if in_stock:
         df = df[df['shares'] > 0.001]
 
     validation_results = validate_securities(portfolio, snapshot, config)
-    df['messages'] = df['securityId'].map(
-        lambda sid: validation_results.get(str(sid), ValidationResult.empty()).messages or ''
-    )
+    df['messages'] = df['securityId'].map(messages_renderer(validation_results, output))
 
     df['costBasis'] = df['securityId'].map(
         lambda sid: calculate_total_cost_basis(portfolio.securities_account_transactions.pipe(filter_by_security, security_id=sid))
@@ -86,9 +88,9 @@ def prepare_securities_df(
     vap_by_security = calculate_vap_by_security(
         portfolio,
         by.year,
-        get_tax_rate(config),
-        get_exempt_rate(config),
-        get_exempt_rate_attribute(config)
+        config.tax.rate,
+        config.tax.exemption_rate,
+        config.tax.exemption_rate_attribute
     )
     df['vap'] = df['securityId'].map(vap_by_security) if vap_by_security else None
 
@@ -100,7 +102,7 @@ def prepare_securities_df(
 def print_securities(  # pylint: disable=too-many-locals
     ctx: typer.Context,
     by: datetime = datetime.now(),
-    active: bool = False,
+    inactive: Annotated[bool, typer.Option("--inactive", help="Include retired (inactive) securities")] = False,
     in_stock: bool = False,
     fields: str | None = None
 ) -> None:
@@ -110,13 +112,16 @@ def print_securities(  # pylint: disable=too-many-locals
     output = cast(OutputStrategy, ctx.obj.output)
     config = cast(Config, ctx.obj.config)
 
+    requested_by_user = fields is not None
     if fields is None:
-        config_fields = get_command_config(config, 'view.securities.fields')
+        config_fields = command_config(config, ViewSecuritiesConfig).fields
+        requested_by_user = bool(config_fields)
         fields = ','.join(config_fields) if config_fields else 'SecurityId,Name,Wkn,Currency,Shares,Messages'
 
-    df = prepare_securities_df(portfolio, config, by, active, in_stock)
+    df = prepare_securities_df(portfolio, config, output, by, inactive, in_stock)
+    retired_ids = retired_row_labels(df)
 
-    uuid_to_name = {uuid: attr.name for uuid, attr in portfolio.security_attributes.items()}
+    uuid_to_name = {uuid: attr.column for uuid, attr in portfolio.security_attributes.items()}
     requested_columns = [uuid_to_name.get(col.strip(), col.strip()) for col in fields.split(',')]
     selected_columns = normalize_columns(requested_columns, list(df.columns))
 
@@ -127,18 +132,15 @@ def print_securities(  # pylint: disable=too-many-locals
 
     df = df.sort_values(by='name') if 'name' in df.columns else df
 
-    def formatter_with_types(attributes: dict[str, Attribute]) -> Callable[[Any, str, pd.Series], str]:
-        renamed_types = {attr.name: attr.converter for attr in attributes.values()}
-        def formatter(value: Any, column_name: str, row: pd.Series) -> str:
-            return format_value(value, column_name, row, renamed_types)
-        return formatter
-
     console.print(*output.result_table(
         df, TableOptions(
-            title=f"{'Active ' if active else ''}Securities",
+            title=f"{'All ' if inactive else 'Active '}Securities",
             caption=f"{len(df)} entries per {by.strftime("%Y-%m-%d")}",
+            keep_columns=tuple(df.columns) if requested_by_user else (),
             show_index=False,
-            value_formatter=formatter_with_types(portfolio.security_attributes)
+            value_formatter=attribute_value_formatter(portfolio.security_attributes),
+            non_summable_columns=percent_attribute_columns(portfolio.security_attributes),
+            dimmed_rows=retired_ids
         )
     ))
     console.print(output.text(footer()), style="dim")

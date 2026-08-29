@@ -19,6 +19,7 @@
 
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -31,20 +32,15 @@ from pp_terminal.utils import config as config_module
 
 
 TAX_RATE = (0.25 + 0.055*0.25) * 100
-EXEMPT_RATE_CONFIG = {
-    "attributes": {
-        "securities": {
-            "exempt-rate": "2baac2d0-459b-4b41-a0ef-d7dad0866892"
-        }
-    }
-}
 
 
 @pytest.fixture(autouse=True)
-def _reset_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config_module, '_loaded_config', {})
-    # prevent a developer's ambient config from leaking into tests that don't pass --config
-    monkeypatch.delenv('PP_TERMINAL_CONFIG', raising=False)
+def _reset_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(config_module, '_loaded_config', config_module.empty_config())
+    monkeypatch.setattr(config_module, '_loaded_config_path', None)
+    # point XDG at an empty dir so a developer's real ~/.config/pp-terminal/config.toml
+    # can never leak into tests that don't pass --config
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
 
 
 @pytest.fixture(autouse=True)

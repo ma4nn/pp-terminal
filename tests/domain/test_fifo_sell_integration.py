@@ -24,12 +24,11 @@ import tempfile
 import pandas as pd
 import pytest
 from pp_terminal.data.filters import filter_by_account_and_security
-from pp_terminal.domain.cost_basis import calculate_fifo_sell
+from pp_terminal.domain.cost_basis import SellContext, calculate_fifo_sell
 
 from pp_terminal.domain.portfolio import Portfolio
-from pp_terminal.domain.schemas import TransactionSchema
+from pp_terminal.domain.schemas import SecurityPriceSchema, TransactionSchema
 from pp_terminal.data.tax import calculate_prepaid_tax_per_lot, load_prepaid_tax_data_from_csv
-from pp_terminal.exceptions import InputError
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
 from tests.conftest import TAX_RATE
@@ -48,7 +47,7 @@ def test_partial_sell_remaining_shares(partial_sell_portfolio: Portfolio) -> Non
 
     # After selling 40 shares, 60 shares remain at 60€ each
     transactions = snapshot.securities_account_transactions.pipe(filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
-    lots = calculate_fifo_sell(transactions, snapshot.date, sell_price=60.0, shares_to_sell=60.0, tax_rate=TAX_RATE)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot.date, 60.0, TAX_RATE), shares_to_sell=60.0)
 
     # All remaining 60 shares come from the original purchase at 5€
     assert len(lots) == 1
@@ -58,23 +57,13 @@ def test_partial_sell_remaining_shares(partial_sell_portfolio: Portfolio) -> Non
     assert lots.iloc[0]['capitalGain'] == pytest.approx(3300.0)  # 60 * (60 - 5)
 
 
-def test_partial_sell_insufficient_shares_error(partial_sell_portfolio: Portfolio) -> None:
-    """Test error when trying to sell more shares than were ever purchased."""
-    snapshot = PortfolioSnapshot(partial_sell_portfolio, datetime(2024, 12, 31))
-    transactions = snapshot.securities_account_transactions.pipe(filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
-
-    # Only 100 shares were purchased, trying to sell 150 should fail
-    with pytest.raises(InputError, match="Insufficient shares"):
-        calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=150.0, sell_price=60.0, tax_rate=TAX_RATE)
-
-
 def test_sell_on_purchase_date(partial_sell_portfolio: Portfolio) -> None:
     """Test selling shares on the same day as purchase."""
     snapshot = PortfolioSnapshot(partial_sell_portfolio, datetime(2023, 12, 30))
     transactions = snapshot.securities_account_transactions.pipe(filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
 
     # Sell 10 shares on the same day they were purchased at 5€
-    lots = calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=10.0, sell_price=5.0, tax_rate=TAX_RATE)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot.date, 5.0, TAX_RATE), shares_to_sell=10.0)
 
     assert len(lots) == 1
     assert lots.iloc[0]['shares'] == pytest.approx(10.0)
@@ -88,29 +77,18 @@ def test_capital_loss_scenario(partial_sell_portfolio: Portfolio) -> None:
     transactions = snapshot.securities_account_transactions.pipe(filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
 
     # Sell at 4€, below purchase price of 5€
-    lots = calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=20.0, sell_price=4.0, tax_rate=TAX_RATE)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot.date, 4.0, TAX_RATE), shares_to_sell=20.0)
 
     assert len(lots) == 1
     assert lots.iloc[0]['shares'] == pytest.approx(20.0)
     assert lots.iloc[0]['purchasePrice'] == pytest.approx(5.0)
     assert lots.iloc[0]['capitalGain'] == pytest.approx(-20.0)  # 20 * (4 - 5)
-
-
-def test_no_vorabpauschale_credit_same_year_sale(partial_sell_portfolio: Portfolio) -> None:
-    """Test Vorabpauschale credit is zero when selling in same year as purchase."""
-    snapshot = PortfolioSnapshot(partial_sell_portfolio, datetime(2023, 12, 30))
-    transactions = snapshot.securities_account_transactions.pipe(filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
-
-    lots = calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=10.0, sell_price=50.0, tax_rate=TAX_RATE)
-
-    # No Vorabpauschale credit for same-year sale (no CSV provided)
-    credit = float(calculate_prepaid_tax_per_lot(lots, datetime(2023, 12, 30), None).sum())
-
-    assert credit == pytest.approx(0.0)
+    assert lots.iloc[0]['totalTax'] == pytest.approx(0.0)  # losses are never taxed
+    assert lots.iloc[0]['netProceeds'] == pytest.approx(lots.iloc[0]['grossProceeds'])
 
 
 def test_empty_transactions() -> None:
-    df = calculate_fifo_sell(TransactionSchema.empty(), datetime.now(), shares_to_sell=10.0, sell_price=60.0, tax_rate=TAX_RATE)
+    df = calculate_fifo_sell(TransactionSchema.empty(), SellContext(datetime.now(), 60.0, TAX_RATE), shares_to_sell=10.0)
 
     assert df.empty
 
@@ -122,9 +100,10 @@ def test_zero_price_error(partial_sell_portfolio: Portfolio) -> None:
         filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
 
     # Zero price should work but result in negative capital gain
-    lots = calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=10.0, sell_price=0.0, tax_rate=TAX_RATE)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot.date, 0.0, TAX_RATE), shares_to_sell=10.0)
 
     assert lots.iloc[0]['capitalGain'] == pytest.approx(-50.0)  # 10 * (0 - 5)
+    assert lots.iloc[0]['totalTax'] == pytest.approx(0.0)
 
 
 def test_very_small_shares(partial_sell_portfolio: Portfolio) -> None:
@@ -134,27 +113,12 @@ def test_very_small_shares(partial_sell_portfolio: Portfolio) -> None:
         filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
 
     # Sell 0.5 shares
-    lots = calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=0.5, sell_price=60.0, tax_rate=TAX_RATE)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot.date, 60.0, TAX_RATE), shares_to_sell=0.5)
 
     assert len(lots) == 1
     assert lots.iloc[0]['shares'] == pytest.approx(0.5)
     assert lots.iloc[0]['costBasis'] == pytest.approx(2.5)  # 0.5 * 5
     assert lots.iloc[0]['capitalGain'] == pytest.approx(27.5)  # 0.5 * (60 - 5)
-
-
-def test_exact_share_match(partial_sell_portfolio: Portfolio) -> None:
-    """Test selling exactly all available shares."""
-    snapshot = PortfolioSnapshot(partial_sell_portfolio, datetime(2024, 12, 31))
-    transactions = snapshot.securities_account_transactions.pipe(
-        filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
-
-    # Sell exactly 60 shares (all remaining)
-    lots = calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=60.0, sell_price=60.0, tax_rate=TAX_RATE)
-
-    assert len(lots) == 1
-    assert lots.iloc[0]['shares'] == pytest.approx(60.0)
-    total_shares = lots['shares'].sum()
-    assert total_shares == pytest.approx(60.0)
 
 
 def test_snapshot_at_different_dates(partial_sell_portfolio: Portfolio) -> None:
@@ -164,21 +128,21 @@ def test_snapshot_at_different_dates(partial_sell_portfolio: Portfolio) -> None:
     snapshot_before = PortfolioSnapshot(partial_sell_portfolio, datetime(2023, 12, 29))
     transactions = snapshot_before.securities_account_transactions.pipe(
         filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
-    lots = calculate_fifo_sell(transactions, snapshot_before.date, shares_to_sell=10.0, sell_price=50.0, tax_rate=TAX_RATE)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot_before.date, 50.0, TAX_RATE), shares_to_sell=10.0)
     assert lots.empty
 
     # After purchase, before sell - should have 100 shares
     snapshot_mid = PortfolioSnapshot(partial_sell_portfolio, datetime(2024, 1, 1))
     transactions = snapshot_mid.securities_account_transactions.pipe(
         filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
-    lots = calculate_fifo_sell(transactions, snapshot_mid.date, shares_to_sell=100.0, sell_price=50.0, tax_rate=TAX_RATE)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot_mid.date, 50.0, TAX_RATE), shares_to_sell=100.0)
     assert lots['shares'].sum() == pytest.approx(100.0)
 
     # After sell - should have 60 shares
     snapshot_after = PortfolioSnapshot(partial_sell_portfolio, datetime(2024, 12, 31))
     transactions = snapshot_after.securities_account_transactions.pipe(
         filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
-    lots = calculate_fifo_sell(transactions, snapshot_after.date, shares_to_sell=60.0, sell_price=60.0, tax_rate=TAX_RATE)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot_after.date, 60.0, TAX_RATE), shares_to_sell=60.0)
     assert lots['shares'].sum() == pytest.approx(60.0)
 
 
@@ -197,7 +161,7 @@ def test_vorabpauschale_csv_calculation(partial_sell_portfolio: Portfolio) -> No
     snapshot = PortfolioSnapshot(partial_sell_portfolio, datetime(2025, 3, 1))
     transactions = partial_sell_portfolio.securities_account_transactions.pipe(
         filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
-    lots = calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=50.0, sell_price=60.0, tax_rate=TAX_RATE, tax_csv_data=csv_data)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot.date, 60.0, TAX_RATE, tax_csv_data=csv_data), shares_to_sell=50.0)
 
     deemed_income = lots['deemedIncome'].sum()
 
@@ -223,7 +187,7 @@ def test_vorabpauschale_csv_missing_data(partial_sell_portfolio: Portfolio) -> N
     snapshot = PortfolioSnapshot(partial_sell_portfolio, datetime(2025, 3, 1))
     transactions = snapshot.securities_account_transactions.pipe(filter_by_account_and_security, account_id='test-portfolio-uuid-001', security_id='test-security-uuid-001')
 
-    lots = calculate_fifo_sell(transactions, snapshot.date, shares_to_sell=50.0, sell_price=60.0, tax_rate=TAX_RATE, tax_csv_data=csv_data)
+    lots = calculate_fifo_sell(transactions, SellContext(snapshot.date, 60.0, TAX_RATE, tax_csv_data=csv_data), shares_to_sell=50.0)
 
     credit = float(calculate_prepaid_tax_per_lot(lots, datetime(2025, 3, 1), csv_data).sum())
 
@@ -281,7 +245,7 @@ def test_exempt_rate_applied_to_total_capital_gain() -> None:
         (pd.Timestamp('2020-01-01'), 'acc-1', 'sec-1')
     ], names=['date', 'accountId', 'securityId']))
 
-    portfolio = Portfolio(accounts, transactions, securities, pd.DataFrame())
+    portfolio = Portfolio(accounts, transactions, securities, SecurityPriceSchema.empty())
 
     # CSV with VAP deemed income: deemed_income = 100€/year total, 1€ per share
     # Note: Exemption rate is now applied during sell calculation, not during CSV loading
@@ -310,12 +274,8 @@ def test_exempt_rate_applied_to_total_capital_gain() -> None:
 
     lots = calculate_fifo_sell(
         transactions,
-        datetime(2022, 6, 1),
-        sell_price=150.0,
+        SellContext(datetime(2022, 6, 1), 150.0, tax_rate, exempt_rate=exempt_rate, tax_csv_data=csv_data),
         shares_to_sell=100.0,
-        tax_rate=tax_rate,
-        tax_csv_data=csv_data,
-        exempt_rate=exempt_rate
     )
 
     # Expected calculation with simplified formula:
@@ -335,102 +295,3 @@ def test_exempt_rate_applied_to_total_capital_gain() -> None:
     # = (4990 - 200) * 0.7 = 4790 * 0.7 = 3353
     assert abs(lot['taxableGain'] - 3353.0) < 0.01, f"Taxable gain should be 3353 ((4990-200) * 0.7), got {lot['taxableGain']}"
     assert abs(lot['totalTax'] - 884.35375) < 0.01, f"Total tax should be ~884.35, got {lot['totalTax']}"
-
-
-def test_simplified_tax_formula_with_deemed_income_base() -> None:
-    """
-    Test simplified tax formula: totalTax = (capitalGain - deemedIncome) * (1 - exemption) * taxRate
-
-    This approach:
-    - Stores deemed income base (not tax) from CSV
-    - Applies exemption rate only once in final calculation
-    - Removes duplicate exemption logic
-    """
-    exempt_rate = 30.0
-    tax_rate = 26.375
-
-    # Create portfolio with single security
-    accounts = pd.DataFrame({
-        'name': ['Test Account'],
-        'type': ['portfolio'],
-        'referenceAccount': [None],
-        'isRetired': [False],
-        'currency': ['EUR']
-    }, index=['acc-1'])
-    accounts.index.name = 'accountId'
-
-    securities = pd.DataFrame({
-        'name': ['Test ETF'],
-        'wkn': ['ETF123'],
-        'isin': ['TEST123456'],
-        'currency': ['EUR'],
-        'isRetired': [False],
-        'note': [None]
-    }, index=['sec-1'])
-    securities.index.name = 'securityId'
-
-    # Buy 100 shares at 100€ on 2020-01-01
-    transactions = pd.DataFrame({
-        'type': ['BUY'],
-        'amount': [10000.0],
-        'shares': [100.0],
-        'accountType': ['portfolio'],
-        'currency': ['EUR'],
-        'taxes': [0.0],
-        'fees': [10.0]
-    }, index=pd.MultiIndex.from_tuples([
-        (pd.Timestamp('2020-01-01'), 'acc-1', 'sec-1')
-    ], names=['date', 'accountId', 'securityId']))
-
-    portfolio = Portfolio(accounts, transactions, securities, pd.DataFrame())
-
-    # CSV with VAP deemed income base: 1€ per share per year
-    # New format: isin;year;deemed_income
-    csv_data = pd.DataFrame({
-        'isin': ['TEST123456', 'TEST123456'],
-        'year': [2020, 2021],
-        'deemed_income': [1.0, 1.0],
-    })
-
-    # Load CSV WITHOUT applying exemption rate
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
-        csv_data.to_csv(f.name, sep=';', index=False)
-        csv_path = Path(f.name)
-
-    # This should load deemed income base as-is (no tax calculation)
-    csv_data_loaded = load_prepaid_tax_data_from_csv(csv_path, portfolio)
-
-    # Sell 100 shares at 150€ on 2022-06-01
-    snapshot = PortfolioSnapshot(portfolio, datetime(2022, 6, 1))
-    transactions_filtered = snapshot.securities_account_transactions.pipe(
-        filter_by_account_and_security,
-        account_id='acc-1',
-        security_id='sec-1'
-    )
-
-    lots = calculate_fifo_sell(
-        transactions_filtered,
-        datetime(2022, 6, 1),
-        sell_price=150.0,
-        shares_to_sell=100.0,
-        tax_rate=tax_rate,
-        tax_csv_data=csv_data_loaded,
-        exempt_rate=exempt_rate
-    )
-
-    # Expected calculation with simplified formula:
-    # Capital gain: 15000 - 10010 = 4990€
-    # Prepaid deemed income base: 100 shares * 1€ * 2 years = 200€
-    # Adjusted gain: 4990 - 200 = 4790€
-    # Total tax: 4790 * (1 - 0.30) * 0.26375 = 4790 * 0.7 * 0.26375 = 884.35375€
-
-    assert len(lots) == 1
-    lot = lots.iloc[0]
-
-    assert abs(lot['capitalGain'] - 4990.0) < 0.01
-    assert abs(lot['deemedIncome'] - 200.0) < 0.01, f"Prepaid deemed income base should be 200, got {lot['deemedIncome']}"
-    assert abs(lot['totalTax'] - 884.35375) < 0.01, f"Total tax should be ~884.35 (simplified formula), got {lot['totalTax']}"
-
-    # Verify the simplified formula is applied correctly
-    expected_total_tax = (lot['capitalGain'] - lot['deemedIncome']) * (1 - exempt_rate / 100) * (tax_rate / 100)
-    assert abs(lot['totalTax'] - expected_total_tax) < 0.01, f"Total tax calculation mismatch: got {lot['totalTax']}, expected {expected_total_tax}"

@@ -26,6 +26,7 @@ import pytest
 from typer import Context
 
 from pp_terminal.commands.view_securities import print_securities
+from pp_terminal.utils.config import empty_config
 from pp_terminal.output.strategy import RichOutputStrategy
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
@@ -69,6 +70,38 @@ def provide_securities_portfolio() -> Portfolio:
     return portfolio
 
 
+@pytest.fixture(name='retired_securities_portfolio')
+def provide_retired_securities_portfolio() -> Portfolio:
+    """Portfolio containing one active and one retired security."""
+
+    accounts = pd.DataFrame([
+        ['Depot1', AccountType.SECURITIES.value, 'account1', False, 'EUR'],
+    ], columns=['name', 'type', 'referenceAccount', 'isRetired', 'currency'],
+    index=['depot1'])
+    accounts.index.name = 'accountId'
+
+    securities = pd.DataFrame([
+        ['MSCI World ETF', 'IE00B4L5Y983', 'EUR', False],
+        ['Legacy Fund', 'DE0000000001', 'EUR', True],
+    ], columns=['name', 'wkn', 'currency', 'isRetired'], index=['sec1', 'sec4'])
+    securities.index.name = 'securityId'
+
+    transactions = pd.DataFrame([
+        [datetime(2022, 1, 15), 'depot1', 'sec1', TransactionType.BUY.value, 5000.0, 50.0, AccountType.SECURITIES.value, 'EUR', 0.0, 0.0],
+    ], columns=['date', 'accountId', 'securityId', 'type', 'amount', 'shares', 'accountType', 'currency', 'taxes', 'fees'])
+    transactions = transactions.set_index(['date', 'accountId', 'securityId'])
+
+    prices = pd.DataFrame([
+        [datetime(2024, 12, 31), 'sec1', 100.0],
+        [datetime(2024, 12, 31), 'sec4', 10.0],
+    ], columns=['date', 'securityId', 'price'])
+    prices = prices.set_index(['date', 'securityId'])
+
+    portfolio = Portfolio(accounts, transactions, securities, prices)
+    portfolio.base_currency = 'EUR'
+    return portfolio
+
+
 @pytest.fixture(name='empty_securities_portfolio')
 def provide_empty_securities_portfolio() -> Portfolio:
     """Portfolio with securities but no transactions."""
@@ -104,7 +137,7 @@ def test_list_securities_with_shares(securities_portfolio: Portfolio, capsys: py
     ctx.obj = Mock()
     ctx.obj.portfolio = securities_portfolio
     ctx.obj.output = RichOutputStrategy()
-    ctx.obj.config = {}
+    ctx.obj.config = empty_config()
 
     print_securities(ctx)
 
@@ -126,7 +159,7 @@ def test_list_securities_without_transactions(empty_securities_portfolio: Portfo
     ctx.obj = Mock()
     ctx.obj.portfolio = empty_securities_portfolio
     ctx.obj.output = RichOutputStrategy()
-    ctx.obj.config = {}
+    ctx.obj.config = empty_config()
 
     print_securities(ctx)
 
@@ -157,7 +190,7 @@ def test_list_securities_sorted_by_name(securities_portfolio: Portfolio, capsys:
     ctx.obj = Mock()
     ctx.obj.portfolio = securities_portfolio
     ctx.obj.output = RichOutputStrategy()
-    ctx.obj.config = {}
+    ctx.obj.config = empty_config()
 
     print_securities(ctx)
 
@@ -169,3 +202,62 @@ def test_list_securities_sorted_by_name(securities_portfolio: Portfolio, capsys:
     no_holdings_pos = output.find('No Holdings')  # May be wrapped
 
     assert msci_pos < no_holdings_pos < sp500_pos
+
+
+def _make_ctx(portfolio: Portfolio) -> Context:
+    ctx = Context(Mock())
+    ctx.obj = Mock()
+    ctx.obj.portfolio = portfolio
+    ctx.obj.output = RichOutputStrategy()
+    ctx.obj.config = empty_config()
+    return ctx
+
+
+def test_in_stock_excludes_securities_without_holdings(securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
+    print_securities(_make_ctx(securities_portfolio), in_stock=True)
+
+    output = capsys.readouterr().out
+
+    assert 'MSCI World ETF' in output
+    assert 'S&P 500 ETF' in output
+    assert 'Holdings' not in output
+    assert '2 entries' in output
+
+
+def test_retired_securities_are_excluded_by_default(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
+    print_securities(_make_ctx(retired_securities_portfolio))
+
+    output = capsys.readouterr().out
+
+    assert 'MSCI World ETF' in output
+    assert 'Legacy' not in output
+    assert '1 entries' in output
+
+
+def test_retired_securities_listed_without_is_retired_column_when_inactive_included(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
+    print_securities(_make_ctx(retired_securities_portfolio), inactive=True)
+
+    output = capsys.readouterr().out
+
+    assert 'MSCI World ETF' in output
+    assert 'Legacy' in output
+    assert 'Retired' not in output
+
+
+def test_is_retired_column_shown_when_requested(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
+    print_securities(_make_ctx(retired_securities_portfolio), inactive=True, fields='name,isRetired')
+
+    output = capsys.readouterr().out
+
+    assert 'Retired' in output
+    assert 'True' in output
+    assert 'False' in output
+
+
+def test_is_retired_column_dropped_when_requested_with_different_casing(retired_securities_portfolio: Portfolio, capsys: pytest.CaptureFixture[str]) -> None:
+    print_securities(_make_ctx(retired_securities_portfolio), inactive=True, fields='name,IsRetired')
+
+    output = capsys.readouterr().out
+
+    assert 'Legacy' in output
+    assert 'Retired' not in output

@@ -17,6 +17,7 @@
     along with pp-terminal. If not, see <http://www.gnu.org/licenses/>.
 """
 
+import shutil
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -29,6 +30,7 @@ from pp_terminal.exceptions import InputError
 from pp_terminal.data.pp_portfolio_builder import PpPortfolioBuilder, CachedPpPortfolioBuilder
 from pp_terminal.data.ppxml2db_wrapper import Ppxml2dbWrapper, DB_NAME_IN_MEMORY
 from pp_terminal.domain.schemas import TransactionType
+from pp_terminal.utils.cache import get_cache_path
 
 EXPECTED_AMOUNT_SIGNS = {
     TransactionType.BUY: -1,
@@ -102,6 +104,16 @@ def test_import_pp_empty_xml(request: TopRequest) -> None:
 def test_import_xml_with_null_property_value(request: TopRequest) -> None:
     """PP v69+ can have properties with empty/null values (e.g. portfolio-chart-details)."""
     CachedPpPortfolioBuilder().construct(request.path.parent.parent / 'fixtures' / 'empty_null_prop.ids.xml')
+
+
+def test_cache_database_is_written_for_special_character_filename(request: TopRequest, tmp_path: Path) -> None:
+    """A "$" in the filename used to break the cache path, silently falling back to an in-memory database."""
+    xml_file = tmp_path / 'depot $ [2025].ids.xml'
+    shutil.copy(request.path.parent.parent / 'fixtures' / 'empty.ids.xml', xml_file)
+
+    CachedPpPortfolioBuilder().construct(xml_file)
+
+    assert get_cache_path(xml_file).exists()
 
 
 def test_import_missing_base_currency_property(request: TopRequest) -> None:

@@ -23,6 +23,9 @@ import pytest
 
 from pp_terminal.utils.cache import get_cache_path
 
+# names whose characters are special to string.Template or to glob patterns
+SPECIAL_CHARACTER_STEMS = ['my portfolio', 'depot $ 2025', 'depot [2025]', 'depot*', 'depot?', 'depot{a}', 'über depot']
+
 
 def test_cache_path_format(tmp_path: Path) -> None:
     """Test that cache path has correct format."""
@@ -111,3 +114,15 @@ def test_cache_path_no_double_dot(tmp_path: Path) -> None:
     assert not cache_path.name.startswith('..')
     # Should be .hidden.<checksum>.pp-terminal.db (single dot)
     assert cache_path.name.startswith('.hidden.')
+
+@pytest.mark.parametrize("stem", SPECIAL_CHARACTER_STEMS)
+def test_cache_path_keeps_special_characters_literal(tmp_path: Path, stem: str) -> None:
+    """Characters like "$" or "[" must not be interpreted as template placeholders or glob patterns."""
+    xml_file = tmp_path / f"{stem}.xml"
+    xml_file.write_text("<?xml version='1.0'?><test>data</test>")
+
+    cache_path = get_cache_path(xml_file)
+
+    assert cache_path.name.startswith(f".{stem}.")
+    assert cache_path.name.endswith('.pp-terminal.db')
+    assert len(cache_path.name.removeprefix(f".{stem}.").removesuffix('.pp-terminal.db')) == 64

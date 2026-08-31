@@ -26,7 +26,6 @@ from pp_terminal.data.filters import (
     clean_for_display,
     drop_empty_values,
     filter_by_account,
-    filter_by_account_and_security,
     filter_by_security,
     filter_by_type,
     filter_earlier_than,
@@ -68,15 +67,6 @@ class TestIndexFilters:
 
         assert len(result) == 3
         assert set(result.index.get_level_values('accountId')) == {'acc-1'}
-
-    def test_filter_by_account_and_security_returns_intersection(self, portfolio_with_purchases: Portfolio) -> None:
-        result = filter_by_account_and_security(
-            portfolio_with_purchases.securities_account_transactions, account_id='acc-1', security_id='sec-1')
-
-        assert len(result) == 3
-        assert set(result.index.get_level_values('accountId')) == {'acc-1'}
-        assert set(result.index.get_level_values('securityId')) == {'sec-1'}
-
 
 class TestDateFilters:
     @pytest.fixture

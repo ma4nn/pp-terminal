@@ -26,12 +26,28 @@ import pytest
 from _pytest.monkeypatch import MonkeyPatch
 from pandera.typing import DataFrame
 
+from pp_terminal.data.filters import filter_by_account, filter_by_security
+from pp_terminal.domain.cost_basis import SellContext, enrich_fifo_lots, finalize_sell_lots
 from pp_terminal.domain.portfolio import Portfolio
-from pp_terminal.domain.schemas import AccountType, TransactionType, TaxPaidSchema
+from pp_terminal.domain.schemas import AccountType, TransactionType, TaxPaidSchema, TaxLotSellSchema
+from pp_terminal.domain.sell_strategy import FixedSharesStrategy
 from pp_terminal.utils import config as config_module
 
 
 TAX_RATE = (0.25 + 0.055*0.25) * 100
+
+
+def account_security(df: pd.DataFrame, account_id: str, security_id: str) -> pd.DataFrame:
+    return df.pipe(filter_by_account, account_id=account_id).pipe(filter_by_security, security_id=security_id)
+
+
+def fifo_sell(transactions: pd.DataFrame, ctx: SellContext, shares_to_sell: float) -> DataFrame[TaxLotSellSchema]:
+    """The FIFO lots a sale of `shares_to_sell` consumes, the way `simulate share-sell --shares` builds them."""
+    lots = enrich_fifo_lots(transactions, ctx)
+    if lots.empty:
+        return TaxLotSellSchema.empty()
+
+    return finalize_sell_lots(FixedSharesStrategy(shares_to_sell).select_lots(lots), ctx.tax_rate)
 
 
 @pytest.fixture(autouse=True)

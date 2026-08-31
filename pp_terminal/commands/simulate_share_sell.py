@@ -112,13 +112,6 @@ def _validate_sell_arguments(
         raise InputError("a minimum amount requires preserve-allocation (a taxonomy)")
 
 
-def _sale_prices(security_ids: list[str], latest_prices: pd.Series, price: Money | None) -> pd.Series:
-    """One sale price per security: the explicit override if given, each security's latest price otherwise."""
-    if price:
-        return pd.Series(price, index=security_ids, dtype='float64')
-    return latest_prices.reindex(security_ids)
-
-
 def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         portfolio: Portfolio,
         config: Config,
@@ -153,7 +146,7 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
         # relocates linked-transfer lots, so a security transferred into the account stays sellable
         holdings = holdings.pipe(filter_by_account, account_id=account_id)
 
-    security_ids = list(holdings.index.get_level_values('securityId').unique())
+    security_ids = holdings.index.get_level_values('securityId').unique()
 
     latest_prices = snapshot.latest_prices
     missing_prices = [sid for sid in security_ids if sid not in latest_prices.index]
@@ -162,8 +155,8 @@ def prepare_share_sell_df(  # pylint: disable=too-many-arguments,too-many-positi
 
     exempt_rate = Percent(config.tax.exemption_rate)
     result = enrich_fifo_lots_per_security(all_transactions, {
-        sec_id: SellContext(snapshot.date, sale_price, tax_rate, exempt_rate, tax_csv_data)
-        for sec_id, sale_price in _sale_prices(security_ids, latest_prices, price).items()
+        sec_id: SellContext(snapshot.date, price if price else latest_prices.loc[sec_id], tax_rate, exempt_rate, tax_csv_data)
+        for sec_id in security_ids
     })
     if result.empty:
         return pd.DataFrame()

@@ -28,7 +28,6 @@ from pandera.typing import DataFrame
 from pp_terminal.data.filters import filter_by_security, filter_by_type
 from pp_terminal.data.tax import calculate_prepaid_tax_per_lot
 from pp_terminal.domain.schemas import TransactionType, Money, TransactionSchema, TaxPaidSchema, TaxLotSchema, TaxLotSellSchema, Percent
-from pp_terminal.domain.sell_strategy import FixedSharesStrategy
 
 log = logging.getLogger(__name__)
 
@@ -50,26 +49,13 @@ def _filter_purchase_transactions(transactions: DataFrame[TransactionSchema]) ->
     return TransactionSchema.validate(valid_purchases)
 
 
-@dataclass(frozen=True)
-class _TransferTarget:
-    """Where a depot transfer moves its lots to, and how the destination sizes them."""
-    account_id: str
-    # destination shares per outgoing share: 1.0 unless the two legs disagree, 0.0 where the incoming leg
-    # books nothing at all — the shares then left the portfolio, so the lots are consumed rather than moved
-    share_ratio: float
-
-
-def _transfer_target(transfer_out_row: pd.Series, shares_out: float) -> _TransferTarget | None:
-    """Destination of a depot transfer, from Portfolio Performance's cross-entry link."""
+def _transfer_target_account(transfer_out_row: pd.Series) -> str | None:
+    """Destination account of a depot transfer, from Portfolio Performance's cross-entry link."""
     account_id = transfer_out_row.get('transferTargetAccount')
-    if account_id is None or pd.isna(account_id) or str(account_id).strip() == '':
+    if account_id is None or pd.isna(account_id) or not str(account_id).strip():
         return None
 
-    shares_in = transfer_out_row.get('transferTargetShares')
-    if shares_out <= 0 or shares_in is None or pd.isna(shares_in):
-        return _TransferTarget(str(account_id), 1.0)  # nothing to move, or an incoming leg Portfolio Performance books equal
-
-    return _TransferTarget(str(account_id), max(float(shares_in), 0.0) / shares_out)
+    return str(account_id)
 
 
 def _consume_lots_fifo(
@@ -77,7 +63,7 @@ def _consume_lots_fifo(
         account_id: str,
         security_id: str,
         shares_to_match: float,
-        target: _TransferTarget | None,
+        target_account: str | None,
 ) -> tuple[float, list[dict[str, Any]]]:
     transferred_lots: list[dict[str, Any]] = []
     for lot in remaining_lots:
@@ -90,18 +76,14 @@ def _consume_lots_fifo(
         new_shares = lot_shares - shares_from_lot
         shares_to_match -= shares_from_lot
 
-        if target and target.share_ratio > 0 and lot_shares > 0:
-            ratio = shares_from_lot / lot_shares
-            # the destination is credited the incoming leg's share count, so scale the lot to it and the
-            # price per share inversely — what was paid for these shares does not change by moving them
+        if target_account and lot_shares > 0:
             # costBasis is left un-prorated here (still the source lot's full amount); every consumer
             # recomputes it from purchasePrice * shares + fees before reading it (see _calculate_cost_basis)
             transferred_lots.append({
                 **lot,
-                'accountId': target.account_id,
-                'shares': shares_from_lot * target.share_ratio,
-                'purchasePrice': lot['purchasePrice'] / target.share_ratio,
-                'fees': lot['fees'] * ratio,
+                'accountId': target_account,
+                'shares': shares_from_lot,
+                'fees': lot['fees'] * (shares_from_lot / lot_shares),
             })
 
         if lot_shares > 0:
@@ -130,9 +112,8 @@ def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionS
         Depot transfers (TRANSFER_OUT → TRANSFER_IN pairs, as recorded by Portfolio
         Performance's "Wertpapierübertrag" feature) are handled by moving FIFO lots from the
         source account to the destination account while preserving the original acquisition
-        cost. Destination account and share count are taken from the authoritative cross-entry link
-        that Portfolio Performance stores for each transfer (TransactionSchema.transferTargetAccount
-        and .transferTargetShares).
+        cost. The destination is taken from the authoritative cross-entry link that Portfolio
+        Performance stores for each transfer (TransactionSchema.transferTargetAccount).
     """
     lots = _filter_purchase_transactions(transactions)
     lots['purchasePrice'] = lots['amount'].abs() / lots['shares']  # save actual market price per share
@@ -151,20 +132,18 @@ def _get_remaining_lots_after_fifo_matching(transactions: DataFrame[TransactionS
     remaining_lots = lots.reset_index().to_dict('records')
 
     for (txn_date, account_id, security_id), row in outgoing.iterrows():
-        is_transfer_out = row['type'] == TransactionType.TRANSFER_OUT.name
         shares_to_sell = float(row['shares'])
+        target_account = None
 
-        target = _transfer_target(row, shares_to_sell) if is_transfer_out else None
-        if is_transfer_out:
-            if target is None:
-                # no authoritative cross-entry link (corrupt or stale-cache data): keep the lots in the
-                # source account so security-level cost basis stays correct — only account attribution is stale
+        if row['type'] == TransactionType.TRANSFER_OUT.name:
+            target_account = _transfer_target_account(row)
+            if target_account is None:
+                # no cross-entry link (corrupt data): keep the lots in the source account so security-level
+                # cost basis stays correct — only account attribution is stale
                 log.warning('TRANSFER_OUT of %.4f shares of %s on %s has no linked destination account — keeping lots in the source account', shares_to_sell, security_id, txn_date)
                 continue
-            if abs(target.share_ratio - 1) > 0.0001:
-                log.warning('Depot transfer of %s on %s books %.8f shares out but %.8f in — the cost basis follows the incoming leg', security_id, txn_date, shares_to_sell, shares_to_sell * target.share_ratio)
 
-        unmatched, transferred_lots = _consume_lots_fifo(remaining_lots, account_id, security_id, shares_to_sell, target)
+        unmatched, transferred_lots = _consume_lots_fifo(remaining_lots, account_id, security_id, shares_to_sell, target_account)
         if transferred_lots:
             remaining_lots.extend(transferred_lots)
             # transferred lots keep their original purchase date, so restore acquisition-date
@@ -236,23 +215,6 @@ def finalize_sell_lots(lots: DataFrame[TaxLotSellSchema], tax_rate: Percent) -> 
     df['deemedIncome'] = df['deemedIncomePerShare'] * df['shares']
     df = _compute_sell_metrics(df, tax_rate)
     return df
-
-
-def calculate_fifo_sell(
-        transactions: DataFrame[TransactionSchema],
-        ctx: SellContext,
-        shares_to_sell: float | None = None
-) -> DataFrame[TaxLotSellSchema]:
-    """Calculate FIFO lots for shares being sold, including prepaid tax calculations."""
-    df = enrich_fifo_lots(transactions, ctx)
-    if df.empty:
-        return TaxLotSellSchema.empty()
-
-    if shares_to_sell is not None:
-        df = FixedSharesStrategy(shares_to_sell).select_lots(df)
-        df = finalize_sell_lots(df, ctx.tax_rate)
-
-    return TaxLotSellSchema.validate(df)
 
 
 def calculate_total_cost_basis(transactions: DataFrame[TransactionSchema]) -> Money:

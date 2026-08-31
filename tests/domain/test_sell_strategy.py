@@ -29,9 +29,8 @@ from pp_terminal.domain.sell_strategy import FixedSharesStrategy, MinTaxStrategy
 from pp_terminal.domain.schemas import AccountType, TransactionType, TaxLotSellSchema
 from pp_terminal.domain.portfolio import Portfolio
 from pp_terminal.domain.portfolio_snapshot import PortfolioSnapshot
-from pp_terminal.data.filters import filter_by_account_and_security
 from pp_terminal.exceptions import InputError
-from tests.conftest import TAX_RATE
+from tests.conftest import TAX_RATE, account_security
 
 
 def _make_portfolio(transactions_data: list[Any], accounts_data: list[Any] | None = None, securities_data: list[Any] | None = None) -> Portfolio:
@@ -69,7 +68,7 @@ def _enrich(portfolio: Portfolio, sell_price: float, acc_id: str = 'acc-1', sec_
         sell_date = datetime(2025, 1, 1)
     snapshot = PortfolioSnapshot(portfolio, sell_date)
     transactions = snapshot.securities_account_transactions.pipe(
-        filter_by_account_and_security, account_id=acc_id, security_id=sec_id
+        account_security, account_id=acc_id, security_id=sec_id
     )
     return enrich_fifo_lots(transactions, SellContext(sell_date, sell_price, TAX_RATE))
 
@@ -82,7 +81,7 @@ def _enrich_multi(portfolio: Portfolio, sell_price: float, sell_date: datetime |
     all_enriched = []
     for (acc_id, sec_id, _currency), _ in holdings.items():
         transactions = snapshot.securities_account_transactions.pipe(
-            filter_by_account_and_security, account_id=acc_id, security_id=sec_id
+            account_security, account_id=acc_id, security_id=sec_id
         )
         enriched = enrich_fifo_lots(transactions, SellContext(sell_date, sell_price, TAX_RATE))
         if not enriched.empty:
@@ -268,7 +267,7 @@ class TestMinTaxStrategy:
         all_enriched = []
         for (acc_id, sec_id, _currency), _ in holdings.items():
             transactions = snapshot.securities_account_transactions.pipe(
-                filter_by_account_and_security, account_id=acc_id, security_id=sec_id
+                account_security, account_id=acc_id, security_id=sec_id
             )
             # sec-1 sell at 0 (nps=0), sec-2 sell at 100 (nps>0)
             sp = 0.0 if sec_id == 'sec-1' else 100.0

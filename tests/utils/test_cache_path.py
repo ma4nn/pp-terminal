@@ -23,8 +23,7 @@ import pytest
 
 from pp_terminal.utils.cache import get_cache_path
 
-# names whose characters are special to string.Template or to glob patterns
-SPECIAL_CHARACTER_STEMS = ['my portfolio', 'depot $ 2025', 'depot [2025]', 'depot*', 'depot?', 'depot{a}', 'über depot']
+from tests.conftest import SPECIAL_CHARACTER_STEMS
 
 
 def test_cache_path_format(tmp_path: Path) -> None:

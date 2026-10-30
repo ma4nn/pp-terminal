@@ -36,6 +36,10 @@ from pp_terminal.utils import config as config_module
 
 TAX_RATE = (0.25 + 0.055*0.25) * 100
 
+# stems whose characters are special to a template or a glob pattern
+SPECIAL_CHARACTER_STEMS = ['my portfolio', 'depot $ 2025', 'depot [2025]', 'depot*', 'depot?', 'depot{a}', 'über depot']
+OUTDATED_CHECKSUM = 'a' * 64
+
 
 def account_security(df: pd.DataFrame, account_id: str, security_id: str) -> pd.DataFrame:
     return df.pipe(filter_by_account, account_id=account_id).pipe(filter_by_security, security_id=security_id)

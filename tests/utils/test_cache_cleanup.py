@@ -23,9 +23,7 @@ import pytest
 
 from pp_terminal.utils.cache import cleanup_old_cache_files, get_cache_path
 
-from tests.utils.test_cache_path import SPECIAL_CHARACTER_STEMS
-
-OUTDATED_CHECKSUM = 'a' * 64
+from tests.conftest import OUTDATED_CHECKSUM, SPECIAL_CHARACTER_STEMS
 
 
 def test_cleanup_removes_old_cache_files(tmp_path: Path) -> None:
@@ -91,6 +89,35 @@ def test_cleanup_ignores_unrelated_files(tmp_path: Path) -> None:
     # Unrelated files should be preserved
     assert other_file1.exists()
     assert other_file2.exists()
+
+@pytest.mark.parametrize("name", [
+    f".test.{OUTDATED_CHECKSUM}.pp-terminal.db.backup",
+    f".test.{OUTDATED_CHECKSUM}.pp-terminal.db-journal",
+    f"prefixed.test.{OUTDATED_CHECKSUM}.pp-terminal.db",
+])
+def test_cleanup_only_deletes_whole_cache_filenames(tmp_path: Path, name: str) -> None:
+    """The cache filename is matched as a whole, so sidecar and prefixed files stay untouched."""
+    xml_file = tmp_path / "test.xml"
+    xml_file.write_text("<?xml version='1.0'?><test>data</test>")
+
+    unrelated_file = tmp_path / name
+    unrelated_file.write_text("no cache file of test.xml")
+
+    cleanup_old_cache_files(xml_file)
+
+    assert unrelated_file.exists()
+
+def test_cleanup_ignores_files_without_a_checksum(tmp_path: Path) -> None:
+    """Only a checksum may stand between prefix and suffix, so a file naming anything else is none of ours."""
+    xml_file = tmp_path / "test.xml"
+    xml_file.write_text("<?xml version='1.0'?><test>data</test>")
+
+    unrelated_file = tmp_path / ".test.zzz.pp-terminal.db"
+    unrelated_file.write_text("no cache file of test.xml")
+
+    cleanup_old_cache_files(xml_file)
+
+    assert unrelated_file.exists()
 
 def test_cleanup_handles_already_deleted_file(tmp_path: Path) -> None:
     """Test that cleanup handles race condition when file is already deleted."""

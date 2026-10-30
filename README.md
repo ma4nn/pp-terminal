@@ -151,7 +151,7 @@ anonymization. Run `pp-terminal init` for the format.
 
 ## Requirements
 
-- [pipx](https://pipx.pypa.io/latest/#install-pipx) to install the application (without having to worry about different Python runtimes)
+- [pipx](https://pipx.pypa.io/latest/#install-pipx) or [uv](https://docs.astral.sh/uv/getting-started/installation/) to install the application (without having to worry about different Python runtimes)
 - Portfolio Performance version >= 0.70.3
 - Portfolio Performance file must be available as XML (with or without ID attributes)
 
@@ -165,6 +165,12 @@ Once installed, update to the latest with:
 
 ```
 pipx upgrade pp-terminal
+```
+
+Alternatively, run it without installing via uv:
+
+```
+uvx pp-terminal --file=depot.xml view accounts
 ```
 
 ## Usage 💡

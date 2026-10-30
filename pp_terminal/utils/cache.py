@@ -50,12 +50,7 @@ def get_cache_path(xml_file: Path) -> Path:
 
 
 def cleanup_old_cache_files(xml_file: Path) -> None:
-    """
-    Delete the cache files of the given XML file that belong to an outdated checksum.
-
-    Raises:
-        OSError: If cache files cannot be deleted (logged as warning, not raised)
-    """
+    """Delete the cache files of the given XML file that belong to an outdated checksum."""
 
     cache_pattern = _get_cache_filename_pattern(xml_file)
     current_cache_name = get_cache_path(xml_file).name

@@ -238,9 +238,6 @@ class CachedPpPortfolioBuilder:  # pylint: disable=too-few-public-methods
             portfolio = builder.construct(file)
 
             if cache_path is not None:
-                try:
-                    cleanup_old_cache_files(file)
-                except Exception as e:  # pylint: disable=broad-exception-caught
-                    log.warning('Failed to cleanup old cache files: %s', str(e))
+                cleanup_old_cache_files(file)
 
         return portfolio

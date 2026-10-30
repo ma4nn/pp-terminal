@@ -33,7 +33,9 @@ RUN git config --global --add safe.directory /app \
          echo "No git history in the build context. Rebuild with --build-arg VERSION=<pep440 version>." >&2; \
          exit 1; \
        fi \
-    && uv sync --frozen --no-dev --no-editable --python /usr/local/bin/python3
+    && uv sync --frozen --no-dev --no-install-project --no-build --python /usr/local/bin/python3 \
+    && uv build --wheel --out-dir /tmp/dist \
+    && uv pip install --no-build --no-deps --python /app/.venv/bin/python /tmp/dist/*.whl
 
 FROM python:3.13-slim-bookworm
 
@@ -43,6 +45,10 @@ RUN apt-get update \
     && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
+RUN useradd --create-home --uid 1000 pp-terminal \
+    && mkdir -p /data \
+    && chown pp-terminal:pp-terminal /data
+
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PATH="/app/.venv/bin:$PATH" \
@@ -51,6 +57,8 @@ ENV LANG=C.UTF-8 \
     PYTHONUNBUFFERED=1
 
 COPY --from=builder /app/.venv /app/.venv
+
+USER pp-terminal
 
 WORKDIR /data
 

@@ -173,6 +173,27 @@ Alternatively, run it without installing via uv:
 uvx pp-terminal --file=depot.xml view accounts
 ```
 
+### Docker
+
+Build an image from a checkout of this repository. The `ppxml2db` submodule has to be
+initialized; the image applies `patch_ppxml2db.diff` the same way `make install` does:
+
+```bash
+git submodule update --init
+docker build -t pp-terminal .
+```
+
+Mount the directory that contains the Portfolio Performance XML file at `/data`:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/data" pp-terminal --file depot.xml view accounts
+```
+
+`--user` keeps the cache file `--cache` writes next to the XML owned by you.
+`de_DE.UTF-8` is generated in the image; pass `-e LANG=de_DE.UTF-8` for German number formatting.
+When the build context has no git history, pass a PEP 440 version so `hatch-vcs` can stamp
+the package: `docker build --build-arg VERSION=0.12.1 -t pp-terminal .`
+
 ## Usage 💡
 
 ### Portfolio Performance XML File

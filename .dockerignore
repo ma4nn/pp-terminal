@@ -1,0 +1,15 @@
+.github
+.idea
+.claude
+.venv
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+dist
+build
+*.egg-info
+tests
+docs
+mutants
+*.pp-terminal.db

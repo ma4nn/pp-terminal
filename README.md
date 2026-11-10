@@ -173,6 +173,34 @@ Alternatively, run it without installing via uv:
 uvx pp-terminal --file=depot.xml view accounts
 ```
 
+### Docker
+
+You can build a Docker image from the PyPI release:
+
+```bash
+docker build -t pp-terminal - <<'EOF'
+FROM python:3.14-slim
+RUN pip install --no-cache-dir pp-terminal
+WORKDIR /data
+ENTRYPOINT ["pp-terminal"]
+EOF
+```
+
+Mount the directory containing your Portfolio Performance XML file at `/data`:
+
+```bash
+docker run --rm -t --user "$(id -u):$(id -g)" -v "$PWD:/data" pp-terminal --file depot.xml view accounts
+```
+
+To use it as an [MCP server](#mcp-server), let your MCP client run:
+
+```bash
+docker run -i --rm --network none --user "$(id -u):$(id -g)" -v /path/to/portfolio:/data pp-terminal --file depot.xml mcp
+```
+
+The container does not see your host configuration file, including anonymization settings.
+Place it next to the XML file and add `--config=config.toml` before the command.
+
 ## Usage 💡
 
 ### Portfolio Performance XML File

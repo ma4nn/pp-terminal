@@ -220,3 +220,12 @@ def test_dataframe_with_only_empty_values_renders_nothing() -> None:
     table.add_df(df)
 
     assert _render(table).strip() == ''
+
+
+def test_all_missing_kept_currency_column_does_not_crash_total() -> None:
+    df = pd.DataFrame({'shares': [1.0, 2.0], 'currency': [None, None]}, index=['a', 'b'])
+    table = TableDecorator(TableOptions(show_index=False, keep_columns=('currency',)))
+    table.add_df(df)
+
+    out = _render(table)
+    assert 'Total' in out

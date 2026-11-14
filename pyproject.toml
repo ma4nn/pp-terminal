@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<4.0.0"
 license = "GPL-3.0-or-later"
 dependencies = [
-    "typer (>=0.15.1,<0.28.0)",
+    "typer>=0.15.1,<0.30.0",
     "pandas (>=3.0.3,<4.0.0)",
     "rich (>=14.3.4,<16.0.0)",
     "pandera (>=0.29.0,<0.36.0)",

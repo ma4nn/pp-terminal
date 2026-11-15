@@ -220,3 +220,11 @@ def test_dataframe_with_only_empty_values_renders_nothing() -> None:
     table.add_df(df)
 
     assert _render(table).strip() == ''
+
+
+def test_all_empty_kept_currency_column_still_renders_total() -> None:
+    df = pd.DataFrame({'name': ['Index A', 'Index B'], 'currency': [None, None], 'shares': [1.0, 2.0]}, index=['a', 'b'])
+    table = TableDecorator(TableOptions(show_index=False, keep_columns=tuple(df.columns)))
+    table.add_df(df)
+
+    assert 'Total' in _line_with(_render(table), '3.0000')

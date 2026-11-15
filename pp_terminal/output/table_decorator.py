@@ -128,8 +128,8 @@ class TableDecorator(Table):
             return self
 
         summary_row = (df.iloc[:-self._options.footer_lines] if self._options.footer_lines > 0 else df).select_dtypes(include='number').sum()  # only sum up numeric values
-        if 'currency' in df.columns:
-            summary_row['currency'] = df['currency'].mode()[0]
+        if 'currency' in df.columns and not (currency_mode := df['currency'].mode()).empty:
+            summary_row['currency'] = currency_mode[0]
         if not self._options.show_index:
             # Find first non-currency column to put 'Total' label
             first_col = next((col for col in df.columns if col != 'currency'), None)

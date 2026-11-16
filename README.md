@@ -310,7 +310,7 @@ If your command makes sense for a broader audience, I'm happy to accept a [pull 
 > public APIs, config or option names may change.
 
 In case you are experiencing any problems:
-1. Create an [anonymized version](#export) of your portfolio (verify!) or use the [kommer sample](tests/fixtures/kommer.toml)
+1. Use the [kommer sample](tests/fixtures/kommer.toml) or create an [anonymized version](#export) of your portfolio (verify!)
 2. Add the `--verbose` option (or its synonym `--debug`) to the command that is causing the issue
 3. And [submit a new issue](https://github.com/ma4nn/pp-terminal/issues/new) and include the results from steps 1. and 2.
 
